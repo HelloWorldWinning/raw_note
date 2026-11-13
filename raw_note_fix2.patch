@@ -1,0 +1,140 @@
+From 16b5a67444cf170865f1dbbaac9faef95b37d125 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 22:25:13 +0800
+Subject: [PATCH] Private port 4444, install dir /root/raw_note_d, tokenizer
+ cpus 1
+
+- Default private notepad port: 7777 -> 4444.
+- Default install folder: /opt/raw_note -> /root/raw_note_d.
+- Tokenizer 'cpus: 1.5' failed on 1-core hosts ('range of CPUs is from
+  0.01 to 1.00'). Now 'cpus: 1': a cap of one core, nothing reserved.
+- Install summary shows the private login (a / a by default) instead of
+  a warning that read like a required step.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01X5571eWQ1xTsjV8G6DCKon
+---
+ README.md          | 11 ++++++-----
+ docker-compose.yml |  4 ++--
+ install_manger.sh  | 16 ++++++++--------
+ 3 files changed, 16 insertions(+), 15 deletions(-)
+
+diff --git a/README.md b/README.md
+index a204a5f..4df6348 100644
+--- a/README.md
++++ b/README.md
+@@ -7,7 +7,7 @@ tokenizer), in Docker.
+ | Notepad | Default URL          | Login            | Notes folder              |
+ |---------|----------------------|------------------|---------------------------|
+ | public  | `http://<ip>:5555`   | none             | `/data/raw_note_d`        |
+-| private | `http://<ip>:7777`   | `a` / `a`        | `/data/raw_note_d_passwd` |
++| private | `http://<ip>:4444`   | `a` / `a`        | `/data/raw_note_d_passwd` |
+ 
+ A third container, `tokenizer`, counts tokens of saved notes. It has no
+ published port and no internet access.
+@@ -18,12 +18,13 @@ published port and no internet access.
+ curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh | bash -s -- --install
+ ```
+ 
+-Installs Docker if missing, puts the code in `/opt/raw_note`, writes settings
+-to `/opt/raw_note/.env`, builds and starts everything, then tests both
++Installs Docker if missing, puts the code in `/root/raw_note_d`, writes settings
++to `/root/raw_note_d/.env`, builds and starts everything, then tests both
+ notepads and the token counter. Running it again repairs or updates the
+ install and keeps your settings.
+ 
+-Change the default `a` / `a` login right after installing:
++The private notepad's login `a` / `a` is created by the install; nothing to
++set up. To change it later:
+ 
+ ```bash
+ raw_note --passwd USER PASS
+@@ -47,6 +48,6 @@ bash <(curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/ma
+ 
+ ```bash
+ curl http://<ip>:5555/mynote                         # print a note
+-curl -u USER:PASS http://<ip>:7777/mynote            # private note
++curl -u USER:PASS http://<ip>:4444/mynote            # private note
+ curl --data-binary @file.txt http://<ip>:5555/mynote # save a note
+ ```
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 007342a..5c17bd6 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -29,7 +29,7 @@ services:
+   notepad-private:
+     build: .
+     ports:
+-      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-7777}:80"
++      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-4444}:80"
+     volumes:
+       - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/var/www/html/_tmp
+     environment:
+@@ -59,7 +59,7 @@ services:
+     tmpfs:
+       - /tmp
+     mem_limit: 768m
+-    cpus: 1.5
++    cpus: 1         # cap at 1 core (a limit, nothing is reserved); works on 1-core hosts
+     restart: unless-stopped
+ 
+ networks:
+diff --git a/install_manger.sh b/install_manger.sh
+index 48e5f4a..5c49b55 100755
+--- a/install_manger.sh
++++ b/install_manger.sh
+@@ -14,15 +14,15 @@
+ #
+ # Default setup:
+ #   public  notepad  http://<ip>:5555  no password    notes in /data/raw_note_d
+-#   private notepad  http://<ip>:7777  user a / pass a notes in /data/raw_note_d_passwd
+-# Settings live in /opt/raw_note/.env (mode 600). Override the install folder
++#   private notepad  http://<ip>:4444  user a / pass a notes in /data/raw_note_d_passwd
++# Settings live in /root/raw_note_d/.env (mode 600). Override the install folder
+ # with RAW_NOTE_DIR=/some/dir.
+ 
+ set -Eeuo pipefail
+ 
+ REPO_URL="${RAW_NOTE_REPO:-https://github.com/HelloWorldWinning/raw_note.git}"
+ BRANCH="${RAW_NOTE_BRANCH:-main}"
+-APP_DIR="${RAW_NOTE_DIR:-/opt/raw_note}"
++APP_DIR="${RAW_NOTE_DIR:-/root/raw_note_d}"
+ ENV_FILE="$APP_DIR/.env"
+ CMD_LINK=/usr/local/bin/raw_note
+ PROJECT=raw_note                          # docker compose project name
+@@ -35,7 +35,7 @@ ENV_KEYS=(PUBLIC_PORT PUBLIC_DIR PRIVATE_PORT PRIVATE_DIR PRIVATE_USER PRIVATE_P
+ declare \
+     D_PUBLIC_PORT=5555 \
+     D_PUBLIC_DIR=/data/raw_note_d \
+-    D_PRIVATE_PORT=7777 \
++    D_PRIVATE_PORT=4444 \
+     D_PRIVATE_DIR=/data/raw_note_d_passwd \
+     D_PRIVATE_USER=a \
+     D_PRIVATE_PASS=a \
+@@ -274,11 +274,11 @@ summary() {
+     echo "${C_B}raw_note${C_N}  (code: $APP_DIR, settings: $ENV_FILE)"
+     printf '  Public   http://%s:%s   no password            notes: %s (%s)\n' \
+         "$ip" "$PUBLIC_PORT" "$PUBLIC_DIR" "$(note_count "$PUBLIC_DIR")"
+-    printf '  Private  http://%s:%s   user: %s  pass: %s chars  notes: %s (%s)\n' \
+-        "$ip" "$PRIVATE_PORT" "$PRIVATE_USER" "${#PRIVATE_PASS}" "$PRIVATE_DIR" "$(note_count "$PRIVATE_DIR")"
++    printf '  Private  http://%s:%s   login: %s / %s   notes: %s (%s)\n' \
++        "$ip" "$PRIVATE_PORT" "$PRIVATE_USER" "$PRIVATE_PASS" "$PRIVATE_DIR" "$(note_count "$PRIVATE_DIR")"
+     printf '  Listen IP %s   Time zone %s\n' "$BIND_IP" "$TZ"
+     if [ "$PRIVATE_USER" = a ] && [ "$PRIVATE_PASS" = a ]; then
+-        warn "The private notepad uses the default login a / a. Change it: raw_note --passwd USER PASS"
++        echo "  Login a / a is the built-in default; nothing to set up. Optional change: raw_note --passwd USER PASS"
+     fi
+     echo "  Manage: raw_note    (or: raw_note --help)"
+ }
+@@ -470,7 +470,7 @@ raw_note manager. Run as root.
+   --logs                                   follow container logs (Ctrl-C quits)
+   --update                                 git pull + rebuild + restart
+   --passwd USER PASS                       private notepad login
+-  --ports PUBLIC PRIVATE                   e.g. --ports 5555 7777
++  --ports PUBLIC PRIVATE                   e.g. --ports 5555 4444
+   --bind IP                                listen IP: 0.0.0.0 = all, 127.0.0.1 = local only
+   --tz ZONE                                e.g. --tz Australia/Perth
+   --data PUBLIC_DIR PRIVATE_DIR [MODE]     change note folders; MODE: move (default),
+-- 
+2.43.0
+

@@ -1,0 +1,1195 @@
+From 455ec46b57b3416f39a946766b9867b0b65e0786 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 13 Nov 2026 14:59:23 +0800
+Subject: [PATCH] Fix token badge 'err'; add private notepad, installer/manager
+
+- Token badge: the request to count.php?note=... matched the EasyPrivacy
+  rule '/count.php?', so ad blockers dropped it in the browser and the
+  badge showed 'err'. Counts are now served from the note's own URL,
+  GET /<note>?tokens=1 (index.php). count.php removed.
+- Badge errors now say what failed: 'err 502', 'err net', 'err json'.
+- Two notepads: public on 5555 (/data/raw_note_d) and private with HTTP
+  basic auth on 7777 (/data/raw_note_d_passwd). The private one refuses
+  to start without a user and password.
+- Tokenizer: /count/<space>/<name>; each notepad counts only its own
+  folder (NOTE_SPACE / NOTE_SPACES).
+- install_manger.sh: --install (no questions) and an interactive manager
+  (status, start/stop/restart, logs, update, login, ports, listen IP,
+  time zone, note folders, backup, uninstall). Installs 'raw_note' command.
+- search.php: snippet position used a byte offset as a character offset,
+  so snippets for Chinese text were off; highlight regex now UTF-8 aware.
+- list.php/search.php: '...' shown only when text is really truncated.
+- Dockerfile: ServerName set (silences AH00558).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01X5571eWQ1xTsjV8G6DCKon
+---
+ .gitignore                        |   6 +
+ Dockerfile                        |  10 +-
+ README.md                         |  52 +++
+ count.php                         |  42 ---
+ docker-compose.yml                |  44 ++-
+ index.php                         |  38 +-
+ install_manger.sh                 | 596 ++++++++++++++++++++++++++++++
+ list.php                          |   4 +-
+ minimalist-web-notepad-entrypoint |  33 ++
+ search.php                        |  20 +-
+ token_badge.js                    |  41 +-
+ tokenizer/app.py                  |  26 +-
+ 12 files changed, 828 insertions(+), 84 deletions(-)
+ create mode 100644 .gitignore
+ create mode 100644 README.md
+ delete mode 100644 count.php
+ create mode 100755 install_manger.sh
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..b215fd4
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,6 @@
++# Settings written by install_manger.sh (contains the private password)
++.env
++.env.tmp.*
++
++# Python caches
++__pycache__/
+diff --git a/Dockerfile b/Dockerfile
+index 282f984..dd12ea5 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -3,15 +3,17 @@ FROM php:7.4-apache
+ # Set PHP configuration to production
+ RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini
+ 
+-# Enable rewrite
+-RUN a2enmod rewrite
++# Enable rewrite; set ServerName to silence the AH00558 warning at start-up.
++RUN a2enmod rewrite \
++ && echo 'ServerName localhost' > /etc/apache2/conf-available/servername.conf \
++ && a2enconf servername
+ 
+ # Import App
+-COPY .htaccess index.php search.php list.php count.php \
++COPY .htaccess index.php search.php list.php \
+      styles.css script.js token_badge.js favicon.ico notes.htaccess \
+      .Longman_Communication_3000.txt ./
+ 
+-# Set entrypoint for permissions
++# Entrypoint: notes folder permissions + optional basic auth
+ COPY minimalist-web-notepad-entrypoint /usr/local/bin/
+ ENTRYPOINT ["minimalist-web-notepad-entrypoint"]
+ CMD ["apache2-foreground"]
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..a204a5f
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,52 @@
++# raw_note
++
++Self-hosted [Minimalist Web Notepad](https://github.com/pereorga/minimalist-web-notepad)
++with search, a note list and a token-count badge (o200k_base + legacy Claude
++tokenizer), in Docker.
++
++| Notepad | Default URL          | Login            | Notes folder              |
++|---------|----------------------|------------------|---------------------------|
++| public  | `http://<ip>:5555`   | none             | `/data/raw_note_d`        |
++| private | `http://<ip>:7777`   | `a` / `a`        | `/data/raw_note_d_passwd` |
++
++A third container, `tokenizer`, counts tokens of saved notes. It has no
++published port and no internet access.
++
++## Install (as root)
++
++```bash
++curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh | bash -s -- --install
++```
++
++Installs Docker if missing, puts the code in `/opt/raw_note`, writes settings
++to `/opt/raw_note/.env`, builds and starts everything, then tests both
++notepads and the token counter. Running it again repairs or updates the
++install and keeps your settings.
++
++Change the default `a` / `a` login right after installing:
++
++```bash
++raw_note --passwd USER PASS
++```
++
++## Manage
++
++```bash
++raw_note            # interactive menu (installed as /usr/local/bin/raw_note)
++raw_note --help     # all commands: status, start, stop, restart, logs, update,
++                    # passwd, ports, bind, tz, data, backup, uninstall
++```
++
++Without an install, run the menu straight from GitHub:
++
++```bash
++bash <(curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh)
++```
++
++## Command line use
++
++```bash
++curl http://<ip>:5555/mynote                         # print a note
++curl -u USER:PASS http://<ip>:7777/mynote            # private note
++curl --data-binary @file.txt http://<ip>:5555/mynote # save a note
++```
+diff --git a/count.php b/count.php
+deleted file mode 100644
+index c051910..0000000
+--- a/count.php
++++ /dev/null
+@@ -1,42 +0,0 @@
+-<?php
+-// count.php
+-// Token counts for one SAVED note, for token_badge.js.
+-//   GET count.php?note=<name>  ->  {"o": <int>, "anthropic": <int>}
+-// The browser sends only the note name. The tokenizer container reads the
+-// saved file itself (read-only mount), so the note text is never re-uploaded.
+-// Status codes are passed through from the tokenizer: 200, 400, 404, 413.
+-// 502 = tokenizer container unreachable.
+-
+-header('Cache-Control: no-store');
+-header('Content-Type: application/json');
+-
+-if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+-    http_response_code(405);
+-    exit('{"error":"GET only"}');
+-}
+-
+-// Same rule as index.php.
+-$note = $_GET['note'] ?? '';
+-if (!is_string($note) || !preg_match('/^[a-zA-Z0-9_-]+$/', $note) || strlen($note) > 64) {
+-    http_response_code(400);
+-    exit('{"error":"bad note name"}');
+-}
+-
+-$base = rtrim(getenv('TOKENIZER_URL') ?: 'http://tokenizer:6969', '/');
+-
+-$ch = curl_init($base . '/count/' . $note);
+-curl_setopt_array($ch, [
+-    CURLOPT_RETURNTRANSFER => true,
+-    CURLOPT_FOLLOWLOCATION => false,
+-    CURLOPT_CONNECTTIMEOUT => 2,
+-    CURLOPT_TIMEOUT        => 30,
+-]);
+-$resp = curl_exec($ch);
+-
+-if ($resp === false) {
+-    http_response_code(502);
+-    exit(json_encode(['error' => 'tokenizer unreachable: ' . curl_error($ch)]));
+-}
+-
+-http_response_code(curl_getinfo($ch, CURLINFO_RESPONSE_CODE));
+-echo $resp;
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 0258996..007342a 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,24 +1,58 @@
++# raw_note: two notepads (public + password-protected) and one tokenizer.
++#
++# Every ${VAR:-default} below can be set in .env next to this file.
++# install_manger.sh writes that .env; without it the defaults are used.
++
++name: raw_note
++
+ services:
+-  minimalist-web-notepad:
++  # Public notepad: no password.
++  notepad:
+     build: .
+     ports:
+-      - "5555:80"
++      - "${BIND_IP:-0.0.0.0}:${PUBLIC_PORT:-5555}:80"
+     volumes:
+-      - /data/Minimalist_Web_Notepad:/var/www/html/_tmp
++      - ${PUBLIC_DIR:-/data/raw_note_d}:/var/www/html/_tmp
+     environment:
++      - TZ=${TZ:-Australia/Perth}
+       - MWN_BASE_URL=
+       - MWN_SAVE_PATH=/var/www/html/_tmp
+       - TOKENIZER_URL=http://tokenizer:6969
++      - NOTE_SPACE=public          # folder name inside the tokenizer's /notes
+     networks:
+-      - default   # published port 3090, internet
++      - default   # published port
+       - tok       # private link to the tokenizer
+     restart: unless-stopped
+     # No depends_on: notes must keep working even if the tokenizer is down.
+ 
++  # Private notepad: HTTP basic auth on every page and API call.
++  notepad-private:
++    build: .
++    ports:
++      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-7777}:80"
++    volumes:
++      - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/var/www/html/_tmp
++    environment:
++      - TZ=${TZ:-Australia/Perth}
++      - MWN_BASE_URL=
++      - MWN_SAVE_PATH=/var/www/html/_tmp
++      - TOKENIZER_URL=http://tokenizer:6969
++      - NOTE_SPACE=private
++      - MWN_AUTH_REQUIRED=1        # refuse to start without a user and password
++      - MWN_AUTH_USER=${PRIVATE_USER:-a}
++      - MWN_AUTH_PASS=${PRIVATE_PASS:-a}
++    networks:
++      - default
++      - tok
++    restart: unless-stopped
++
+   tokenizer:
+     build: ./tokenizer
+     volumes:
+-      - /data/Minimalist_Web_Notepad:/notes:ro
++      - ${PUBLIC_DIR:-/data/raw_note_d}:/notes/public:ro
++      - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/notes/private:ro
++    environment:
++      - NOTE_SPACES=public,private
+     networks:
+       - tok       # internal only: no published port, no internet
+     read_only: true
+diff --git a/index.php b/index.php
+index da0c574..b5e300e 100644
+--- a/index.php
++++ b/index.php
+@@ -71,6 +71,41 @@ if ($_GET['note'] === 'list') {
+ $note = $_GET['note'];
+ $path = $save_path . '/' . $note;
+ 
++// ---------------------------------------------------------------------------
++// Token counts of this SAVED note, for token_badge.js.
++//   GET /<note>?tokens=1  ->  {"o": <int>, "anthropic": <int>}
++// Served from the note's own URL on purpose: the old URL "count.php?note=..."
++// matches the EasyPrivacy rule "/count.php?", so ad blockers dropped the
++// request inside the browser and the badge showed "err".
++// The tokenizer reads the saved file itself; the note text is not re-sent.
++// Tokenizer status codes are passed through (200, 400, 404, 413).
++// 502 = tokenizer unreachable.
++// ---------------------------------------------------------------------------
++if (isset($_GET['tokens']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
++    header('Content-Type: application/json');
++
++    // Which folder of the tokenizer's /notes holds this notepad's files.
++    $space = getenv('NOTE_SPACE') ?: 'public';
++    $base  = rtrim(getenv('TOKENIZER_URL') ?: 'http://tokenizer:6969', '/');
++
++    $ch = curl_init($base . '/count/' . rawurlencode($space) . '/' . $note);
++    curl_setopt_array($ch, [
++        CURLOPT_RETURNTRANSFER => true,
++        CURLOPT_FOLLOWLOCATION => false,
++        CURLOPT_CONNECTTIMEOUT => 2,
++        CURLOPT_TIMEOUT        => 30,
++    ]);
++    $resp = curl_exec($ch);
++
++    if ($resp === false) {
++        http_response_code(502);
++        exit(json_encode(['error' => 'tokenizer unreachable: ' . curl_error($ch)]));
++    }
++
++    http_response_code(curl_getinfo($ch, CURLINFO_RESPONSE_CODE));
++    exit($resp);
++}
++
+ // ---------------------------------------------------------------------------
+ // Save.
+ // Accepts three body formats:
+@@ -167,8 +202,7 @@ if (isset($_GET['raw']) || strpos($ua, 'curl') === 0 || strpos($ua, 'Wget') ===
+     <pre id="printable"></pre>
+     <script src="<?php print $base_url; ?>/script.js?v=<?php print filemtime(__DIR__ . '/script.js'); ?>"></script>
+     <script src="<?php print $base_url; ?>/token_badge.js?v=<?php print filemtime(__DIR__ . '/token_badge.js'); ?>"
+-            data-note="<?php print $note; ?>"
+-            data-count-url="<?php print $base_url; ?>/count.php"></script>
++            data-tokens-url="<?php print $base_url . '/' . $note; ?>?tokens=1"></script>
+ 
+ </body>
+ </html>
+diff --git a/install_manger.sh b/install_manger.sh
+new file mode 100755
+index 0000000..48e5f4a
+--- /dev/null
++++ b/install_manger.sh
+@@ -0,0 +1,596 @@
++#!/usr/bin/env bash
++# install_manger.sh - install and manage raw_note
++# (Minimalist Web Notepad + token badge, two notepads + tokenizer in Docker)
++#
++#   bash install_manger.sh --install    default install, asks nothing
++#   bash install_manger.sh              interactive manager menu
++#   bash install_manger.sh --help       all commands
++#
++# From GitHub:
++#   curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh | bash -s -- --install
++#   bash <(curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh)
++#
++# After install, the command "raw_note" runs this script (menu or same flags).
++#
++# Default setup:
++#   public  notepad  http://<ip>:5555  no password    notes in /data/raw_note_d
++#   private notepad  http://<ip>:7777  user a / pass a notes in /data/raw_note_d_passwd
++# Settings live in /opt/raw_note/.env (mode 600). Override the install folder
++# with RAW_NOTE_DIR=/some/dir.
++
++set -Eeuo pipefail
++
++REPO_URL="${RAW_NOTE_REPO:-https://github.com/HelloWorldWinning/raw_note.git}"
++BRANCH="${RAW_NOTE_BRANCH:-main}"
++APP_DIR="${RAW_NOTE_DIR:-/opt/raw_note}"
++ENV_FILE="$APP_DIR/.env"
++CMD_LINK=/usr/local/bin/raw_note
++PROJECT=raw_note                          # docker compose project name
++OLD_DATA_DIR=/data/Minimalist_Web_Notepad # notes of the old single-notepad setup
++BACKUP_DIR_DEFAULT=/data/raw_note_backup
++
++# Settings stored in .env, with their defaults.
++ENV_KEYS=(PUBLIC_PORT PUBLIC_DIR PRIVATE_PORT PRIVATE_DIR PRIVATE_USER PRIVATE_PASS BIND_IP TZ)
++# shellcheck disable=SC2034  # read indirectly as ${!d} in load_env
++declare \
++    D_PUBLIC_PORT=5555 \
++    D_PUBLIC_DIR=/data/raw_note_d \
++    D_PRIVATE_PORT=7777 \
++    D_PRIVATE_DIR=/data/raw_note_d_passwd \
++    D_PRIVATE_USER=a \
++    D_PRIVATE_PASS=a \
++    D_BIND_IP=0.0.0.0 \
++    D_TZ=Australia/Perth
++
++# ---------------------------------------------------------------- output ----
++if [ -t 1 ]; then
++    C_R=$'\e[31m'; C_G=$'\e[32m'; C_Y=$'\e[33m'; C_B=$'\e[1m'; C_N=$'\e[0m'
++else
++    C_R=''; C_G=''; C_Y=''; C_B=''; C_N=''
++fi
++info() { printf '%s==>%s %s\n' "$C_G" "$C_N" "$*"; }
++warn() { printf '%sWARN:%s %s\n' "$C_Y" "$C_N" "$*" >&2; }
++die()  { printf '%sERROR:%s %s\n' "$C_R" "$C_N" "$*" >&2; exit 1; }
++
++# --------------------------------------------------------------- helpers ----
++need_root() {
++    [ "$(id -u)" -eq 0 ] || die "Run as root, for example: sudo bash install_manger.sh $*"
++}
++
++is_installed() { [ -f "$APP_DIR/docker-compose.yml" ] && [ -f "$ENV_FILE" ]; }
++
++need_installed() {
++    is_installed || die "raw_note is not installed in $APP_DIR. Run: bash install_manger.sh --install"
++}
++
++dc() {
++    docker compose --project-name "$PROJECT" --project-directory "$APP_DIR" \
++        -f "$APP_DIR/docker-compose.yml" --env-file "$ENV_FILE" "$@"
++}
++
++# Read .env into shell variables. Missing keys get the defaults.
++# Parsed line by line (not sourced), so file content is never executed.
++load_env() {
++    local k line v
++    for k in "${ENV_KEYS[@]}"; do
++        local d="D_$k"
++        printf -v "$k" '%s' "${!d}"
++    done
++    [ -f "$ENV_FILE" ] || return 0
++    while IFS= read -r line || [ -n "$line" ]; do
++        case "$line" in ''|'#'*) continue ;; esac
++        k=${line%%=*}
++        v=${line#*=}
++        v=${v#\'}; v=${v%\'}
++        case " ${ENV_KEYS[*]} " in *" $k "*) printf -v "$k" '%s' "$v" ;; esac
++    done < "$ENV_FILE"
++}
++
++# Write all settings to .env. Values are single-quoted: docker compose then
++# takes them literally (no $ expansion). valid_* below forbid "'" in values.
++save_env() {
++    local tmp="$ENV_FILE.tmp.$$" k
++    (
++        umask 077
++        {
++            echo "# raw_note settings, written by install_manger.sh."
++            echo "# Change them with the manager (command: raw_note), not by hand."
++            for k in "${ENV_KEYS[@]}"; do printf "%s='%s'\n" "$k" "${!k}"; done
++        } > "$tmp"
++    )
++    mv -f "$tmp" "$ENV_FILE"
++    chmod 600 "$ENV_FILE"
++}
++
++valid_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]; }
++valid_user() { [[ $1 =~ ^[A-Za-z0-9._-]{1,32}$ ]]; }
++valid_pass() { [ -n "$1" ] && [ "${#1}" -le 128 ] && [[ $1 != *"'"* && $1 != *$'\n'* ]]; }
++valid_ip()   { [[ $1 =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] &&
++               local o && for o in "${BASH_REMATCH[@]:1}"; do [ "$o" -le 255 ] || return 1; done; }
++valid_dir()  { [[ $1 == /?* && $1 != *[[:space:]\'\$\`\"\\]* && $1 != */ ]]; }
++valid_tz()   { [[ $1 =~ ^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$ ]] &&
++               { [ ! -d /usr/share/zoneinfo ] || [ -f "/usr/share/zoneinfo/$1" ]; }; }
++
++PASS_RULE="1-128 characters, no single quote (') and no newline"
++USER_RULE="1-32 characters from A-Z a-z 0-9 . _ -"
++DIR_RULE="an absolute path, no spaces, quotes, \$, \` or backslash, no trailing /"
++
++# Is the TCP port held by something other than raw_note's own containers?
++port_busy() {
++    local p=$1
++    command -v ss >/dev/null 2>&1 || return 1
++    ss -Htln "sport = :$p" 2>/dev/null | grep -q . || return 1
++    if docker ps --filter "label=com.docker.compose.project=$PROJECT" \
++            --format '{{.Ports}}' 2>/dev/null | grep -Eq ":$p->"; then
++        return 1
++    fi
++    return 0
++}
++
++check_ports_free() {
++    local p
++    for p in "$@"; do
++        if port_busy "$p"; then
++            die "Port $p is already in use:
++$(ss -Htlnp "sport = :$p" 2>/dev/null | head -3)
++Stop that program, or choose another port (raw_note -> Change ports)."
++        fi
++    done
++}
++
++host_for_check() { if [ "$BIND_IP" = 0.0.0.0 ]; then echo 127.0.0.1; else echo "$BIND_IP"; fi; }
++
++host_for_user() {
++    if [ "$BIND_IP" != 0.0.0.0 ]; then echo "$BIND_IP"; return; fi
++    local ip
++    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
++    echo "${ip:-<server-ip>}"
++}
++
++note_count() { find "$1" -maxdepth 1 -type f ! -name '.*' 2>/dev/null | wc -l | tr -d ' '; }
++
++ask() {   # ask "Question" [default]  -> answer in REPLY
++    local q=$1 def=${2-}
++    read -r -p "$q${def:+ [$def]}: " REPLY || exit 1
++    REPLY=${REPLY:-$def}
++}
++
++confirm() { local a; read -r -p "$1 [y/N]: " a || exit 1; [[ $a =~ ^[Yy]$|^[Yy][Ee][Ss]$ ]]; }
++
++pause() { read -r -p "Press Enter to return to the menu..." _ || true; }
++
++# Run a command in a subshell so its "die" returns to the menu instead of
++# quitting. "( cmd ) || true" would switch off set -e inside cmd, so set -e
++# is turned on inside the subshell while the caller has it off.
++run_sub() {
++    set +e
++    ( set -e; "$@" )
++    set -e
++}
++
++# --------------------------------------------------------- install steps ----
++ensure_pkgs() {
++    local missing=() c
++    for c in git curl; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
++    [ "${#missing[@]}" -eq 0 ] && return 0
++    info "Installing ${missing[*]} ..."
++    if command -v apt-get >/dev/null 2>&1; then
++        DEBIAN_FRONTEND=noninteractive apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${missing[@]}"
++    elif command -v dnf >/dev/null 2>&1; then dnf install -y "${missing[@]}"
++    elif command -v yum >/dev/null 2>&1; then yum install -y "${missing[@]}"
++    elif command -v apk >/dev/null 2>&1; then apk add --no-cache "${missing[@]}"
++    else die "Please install: ${missing[*]}"
++    fi
++}
++
++ensure_docker() {
++    if ! command -v docker >/dev/null 2>&1; then
++        info "Installing Docker (https://get.docker.com) ..."
++        curl -fsSL https://get.docker.com | sh
++    fi
++    systemctl enable --now docker >/dev/null 2>&1 || true
++    docker info >/dev/null 2>&1 || die "Docker is installed but the daemon is not running."
++    docker compose version >/dev/null 2>&1 ||
++        die "The 'docker compose' plugin is missing. Install the docker-compose-plugin package and retry."
++}
++
++sync_repo() {
++    if [ -d "$APP_DIR/.git" ]; then
++        info "Updating code in $APP_DIR ..."
++        git -C "$APP_DIR" fetch -q origin "$BRANCH"
++        git -C "$APP_DIR" checkout -q "$BRANCH"
++        git -C "$APP_DIR" merge -q --ff-only "origin/$BRANCH" ||
++            die "Local edits in $APP_DIR block the update. See: git -C $APP_DIR status"
++    elif [ -e "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
++        die "$APP_DIR exists, is not empty and is not a git checkout. Move it away or set RAW_NOTE_DIR."
++    else
++        info "Downloading code to $APP_DIR ..."
++        mkdir -p "$(dirname "$APP_DIR")"
++        git clone -q -b "$BRANCH" "$REPO_URL" "$APP_DIR"
++    fi
++    chmod +x "$APP_DIR/install_manger.sh"
++    ln -sfn "$APP_DIR/install_manger.sh" "$CMD_LINK"
++}
++
++prepare_dirs() {
++    mkdir -p "$PUBLIC_DIR" "$PRIVATE_DIR"
++    chmod 700 "$PRIVATE_DIR"
++    # One time only: copy the old setup's notes into the empty public folder.
++    if [ -d "$OLD_DATA_DIR" ] && [ "$(note_count "$PUBLIC_DIR")" = 0 ] &&
++       [ "$(note_count "$OLD_DATA_DIR")" != 0 ]; then
++        info "Copying $(note_count "$OLD_DATA_DIR") old notes: $OLD_DATA_DIR -> $PUBLIC_DIR (old folder is kept)"
++        cp -a "$OLD_DATA_DIR/." "$PUBLIC_DIR/"
++    fi
++}
++
++start_stack() {   # build images, then (re)create all containers
++    info "Building images. The first build downloads tokenizer files and takes a few minutes ..."
++    dc build
++    if ! dc up -d --remove-orphans; then
++        warn "Start failed; removing old containers and trying once more ..."
++        dc down --remove-orphans || true
++        dc up -d
++    fi
++}
++
++# Wait until both notepads answer and the tokenizer counts a real note.
++health_check() {
++    local h code_pub=000 code_priv=000 tok="" name
++    h=$(host_for_check)
++    for _ in $(seq 1 60); do
++        code_pub=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://$h:$PUBLIC_PORT/" || true)
++        code_priv=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://$h:$PRIVATE_PORT/" || true)
++        [ "$code_pub" = 302 ] && [ "$code_priv" = 401 ] && break
++        sleep 2
++    done
++    if [ "$code_pub" = 302 ]; then info "Public notepad  OK (port $PUBLIC_PORT)"
++    else warn "Public notepad did not answer as expected (HTTP $code_pub). See: raw_note --logs"; fi
++    if [ "$code_priv" = 401 ]; then info "Private notepad OK (port $PRIVATE_PORT, password required)"
++    else warn "Private notepad did not answer as expected (HTTP $code_priv, wanted 401). See: raw_note --logs"; fi
++
++    # Token counter end to end: save a scratch note, count it, delete it.
++    [ "$code_pub" = 302 ] || return 0
++    name="zz-raw-note-selftest-$$"
++    curl -s -o /dev/null -m 5 -X POST -H 'Content-Type: text/plain' \
++        --data-binary 'hello world' "http://$h:$PUBLIC_PORT/$name" || true
++    for _ in $(seq 1 45); do   # tokenizer may still be loading its vocab
++        tok=$(curl -s -m 35 "http://$h:$PUBLIC_PORT/$name?tokens=1" || true)
++        [[ $tok == *'"anthropic"'* ]] && break
++        sleep 2
++    done
++    curl -s -o /dev/null -m 5 -X POST -H 'Content-Type: text/plain' \
++        --data-binary '' "http://$h:$PUBLIC_PORT/$name" || true
++    if [[ $tok == *'"anthropic"'* ]]; then
++        info "Token counter   OK ('hello world' -> $tok)"
++    else
++        warn "Token counter is not answering yet: ${tok:-no reply}. See: raw_note --logs"
++    fi
++}
++
++summary() {
++    local ip
++    ip=$(host_for_user)
++    echo
++    echo "${C_B}raw_note${C_N}  (code: $APP_DIR, settings: $ENV_FILE)"
++    printf '  Public   http://%s:%s   no password            notes: %s (%s)\n' \
++        "$ip" "$PUBLIC_PORT" "$PUBLIC_DIR" "$(note_count "$PUBLIC_DIR")"
++    printf '  Private  http://%s:%s   user: %s  pass: %s chars  notes: %s (%s)\n' \
++        "$ip" "$PRIVATE_PORT" "$PRIVATE_USER" "${#PRIVATE_PASS}" "$PRIVATE_DIR" "$(note_count "$PRIVATE_DIR")"
++    printf '  Listen IP %s   Time zone %s\n' "$BIND_IP" "$TZ"
++    if [ "$PRIVATE_USER" = a ] && [ "$PRIVATE_PASS" = a ]; then
++        warn "The private notepad uses the default login a / a. Change it: raw_note --passwd USER PASS"
++    fi
++    echo "  Manage: raw_note    (or: raw_note --help)"
++}
++
++# -------------------------------------------------------------- commands ----
++cmd_install() {
++    need_root --install
++    ensure_pkgs
++    ensure_docker
++    sync_repo
++    load_env      # keeps the settings of an earlier install
++    save_env
++    prepare_dirs
++    check_ports_free "$PUBLIC_PORT" "$PRIVATE_PORT"
++    start_stack
++    health_check
++    summary
++}
++
++cmd_status() {
++    need_installed; load_env
++    summary
++    echo
++    dc ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}\t{{.Ports}}' || true
++}
++
++cmd_start()   { need_root; need_installed; load_env; check_ports_free "$PUBLIC_PORT" "$PRIVATE_PORT"; dc up -d; health_check; }
++cmd_stop()    { need_root; need_installed; dc stop; info "Stopped."; }
++cmd_restart() { need_root; need_installed; load_env; dc restart; health_check; }
++cmd_logs()    { need_installed; dc logs -f --tail 100; }
++
++cmd_update() {
++    need_root; need_installed
++    sync_repo
++    load_env; save_env
++    start_stack
++    health_check
++    summary
++}
++
++cmd_passwd() {   # USER PASS
++    need_root; need_installed
++    valid_user "$1" || die "Username must be $USER_RULE."
++    valid_pass "$2" || die "Password must be $PASS_RULE."
++    load_env
++    PRIVATE_USER=$1; PRIVATE_PASS=$2
++    save_env
++    dc up -d notepad-private
++    info "Private notepad login is now user '$PRIVATE_USER' (password ${#PRIVATE_PASS} chars)."
++}
++
++cmd_ports() {    # PUBLIC PRIVATE
++    need_root; need_installed
++    valid_port "$1" && valid_port "$2" || die "Ports must be numbers from 1 to 65535."
++    [ "$1" != "$2" ] || die "The two ports must differ."
++    load_env
++    local p
++    for p in "$1" "$2"; do
++        if [ "$p" != "$PUBLIC_PORT" ] && [ "$p" != "$PRIVATE_PORT" ]; then check_ports_free "$p"; fi
++    done
++    PUBLIC_PORT=$1; PRIVATE_PORT=$2
++    save_env
++    dc stop notepad notepad-private
++    dc up -d
++    health_check
++    summary
++}
++
++cmd_bind() {     # IP
++    need_root; need_installed
++    valid_ip "$1" || die "Listen IP must be an IPv4 address, e.g. 0.0.0.0 (all) or 127.0.0.1 (local only)."
++    load_env
++    BIND_IP=$1
++    save_env
++    dc stop notepad notepad-private
++    dc up -d
++    health_check
++}
++
++cmd_tz() {       # ZONE
++    need_root; need_installed
++    valid_tz "$1" || die "Unknown time zone '$1'. Example: Australia/Perth, Asia/Shanghai, UTC."
++    load_env
++    TZ=$1
++    save_env
++    dc up -d notepad notepad-private
++    info "Time zone is now $TZ (used for new note names and list dates)."
++}
++
++# Move every entry of folder $1 into folder $2; never overwrite.
++move_entries() {
++    local f left=0
++    for f in "$1"/* "$1"/.[!.]* "$1"/..?*; do
++        [ -e "$f" ] || [ -L "$f" ] || continue
++        if [ -e "$2/$(basename "$f")" ]; then left=$((left + 1)); continue; fi
++        mv "$f" "$2/"
++    done
++    [ "$left" -eq 0 ] || warn "$left item(s) left in $1: same name already in $2."
++}
++
++# Copy folder $1 into folder $2; never overwrite. coreutils >= 9.3 warns
++# about -n and wants --update=none; older cp only knows -n.
++copy_no_clobber() {
++    if cp --help 2>&1 | grep -q -- '--update\[='; then
++        cp -a --update=none "$1/." "$2/"
++    else
++        cp -an "$1/." "$2/"
++    fi
++}
++
++cmd_data() {     # PUBLIC_DIR PRIVATE_DIR MODE(move|copy|none)
++    need_root; need_installed
++    local np=$1 nq=$2 mode=${3:-move} old new
++    valid_dir "$np" && valid_dir "$nq" || die "Folders must be $DIR_RULE."
++    [ "$np" != "$nq" ] || die "The two folders must differ."
++    case "$np/" in "$nq/"*) die "One folder must not be inside the other." ;; esac
++    case "$nq/" in "$np/"*) die "One folder must not be inside the other." ;; esac
++    case "$mode" in move|copy|none) ;; *) die "Mode must be move, copy or none." ;; esac
++    load_env
++    [ "$np" != "$PRIVATE_DIR" ] && [ "$nq" != "$PUBLIC_DIR" ] ||
++        die "Swapping the public and private folders is not supported (notes would mix)."
++    for old in "$PUBLIC_DIR" "$PRIVATE_DIR"; do
++        for new in "$np" "$nq"; do
++            [ "$old" = "$new" ] && continue
++            case "$new/" in "$old/"*) die "$new is inside the current folder $old." ;; esac
++            case "$old/" in "$new/"*) die "The current folder $old is inside $new." ;; esac
++        done
++    done
++
++    info "Stopping raw_note ..."
++    dc stop
++    mkdir -p "$np" "$nq"
++    chmod 700 "$nq"
++    while read -r old new; do
++        [ "$old" = "$new" ] && continue
++        [ -d "$old" ] || continue
++        case "$mode" in
++            move) info "Moving notes $old -> $new";  move_entries "$old" "$new"
++                  rmdir "$old" 2>/dev/null || true ;;
++            copy) info "Copying notes $old -> $new"; copy_no_clobber "$old" "$new" ;;
++            none) info "Not touching $old (notes stay there)" ;;
++        esac
++    done <<EOF
++$PUBLIC_DIR $np
++$PRIVATE_DIR $nq
++EOF
++    PUBLIC_DIR=$np; PRIVATE_DIR=$nq
++    save_env
++    dc up -d
++    health_check
++    summary
++}
++
++cmd_backup() {   # [DIR]
++    need_root; need_installed; load_env
++    local dest=${1:-$BACKUP_DIR_DEFAULT} f
++    mkdir -p "$dest"
++    f="$dest/raw_note_$(date +%Y-%m-%d_%H%M%S).tar.gz"
++    tar -czf "$f" -C / "${PUBLIC_DIR#/}" "${PRIVATE_DIR#/}"
++    chmod 600 "$f"
++    info "Backup written: $f ($(du -h "$f" | cut -f1))"
++    echo "  Restore: tar -xzf $f -C /"
++}
++
++cmd_uninstall() {  # [--yes]
++    need_root; need_installed; load_env
++    if [ "${1:-}" != --yes ]; then
++        echo "This removes the containers, images, $APP_DIR and $CMD_LINK."
++        echo "Notes are KEPT in $PUBLIC_DIR and $PRIVATE_DIR."
++        local a; read -r -p "Type 'yes' to uninstall: " a || exit 1
++        [ "$a" = yes ] || { info "Cancelled."; return 0; }
++    fi
++    dc down --rmi local --remove-orphans || true
++    rm -f "$CMD_LINK"
++    rm -rf "$APP_DIR"
++    info "Uninstalled. Notes kept in $PUBLIC_DIR and $PRIVATE_DIR."
++}
++
++usage() {
++    cat <<EOF
++raw_note manager. Run as root.
++
++  bash install_manger.sh --install         install with defaults, ask nothing
++                                           (run again to repair; keeps settings)
++  bash install_manger.sh                   interactive menu
++
++  --status                                 URLs, folders, container state
++  --start | --stop | --restart
++  --logs                                   follow container logs (Ctrl-C quits)
++  --update                                 git pull + rebuild + restart
++  --passwd USER PASS                       private notepad login
++  --ports PUBLIC PRIVATE                   e.g. --ports 5555 7777
++  --bind IP                                listen IP: 0.0.0.0 = all, 127.0.0.1 = local only
++  --tz ZONE                                e.g. --tz Australia/Perth
++  --data PUBLIC_DIR PRIVATE_DIR [MODE]     change note folders; MODE: move (default),
++                                           copy, or none (leave old notes in place)
++  --backup [DIR]                           .tar.gz of both note folders
++                                           (default DIR: $BACKUP_DIR_DEFAULT)
++  --uninstall [--yes]                      remove app; notes are kept
++  --help
++
++From GitHub (note "bash -s --": plain "| bash --install" does not work):
++  curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh | bash -s -- --install
++  bash <(curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh)
++EOF
++}
++
++# ------------------------------------------------------------------ menu ----
++menu_passwd() {
++    load_env
++    ask "New username ($USER_RULE)" "$PRIVATE_USER"; local u=$REPLY p1 p2
++    read -r -s -p "New password ($PASS_RULE): " p1; echo
++    read -r -s -p "Repeat password: " p2; echo
++    [ "$p1" = "$p2" ] || { warn "Passwords differ. Nothing changed."; return; }
++    run_sub cmd_passwd "$u" "$p1"
++}
++
++menu_ports() {
++    load_env
++    ask "Public port" "$PUBLIC_PORT";   local a=$REPLY
++    ask "Private port" "$PRIVATE_PORT"; local b=$REPLY
++    run_sub cmd_ports "$a" "$b"
++}
++
++menu_data() {
++    load_env
++    ask "Public notes folder" "$PUBLIC_DIR";   local a=$REPLY
++    ask "Private notes folder" "$PRIVATE_DIR"; local b=$REPLY
++    if [ "$a" = "$PUBLIC_DIR" ] && [ "$b" = "$PRIVATE_DIR" ]; then info "Nothing changed."; return; fi
++    echo "Existing notes:  1) move to the new folder   2) copy   3) leave them where they are"
++    ask "Choose" 1
++    local m
++    case "$REPLY" in 1) m=move ;; 2) m=copy ;; 3) m=none ;; *) warn "Invalid choice."; return ;; esac
++    run_sub cmd_data "$a" "$b" "$m"
++}
++
++menu_bind() { load_env; ask "Listen IP (0.0.0.0 = all, 127.0.0.1 = local only)" "$BIND_IP"; run_sub cmd_bind "$REPLY"; }
++menu_tz()   { load_env; ask "Time zone" "$TZ"; run_sub cmd_tz "$REPLY"; }
++menu_backup() { ask "Backup folder" "$BACKUP_DIR_DEFAULT"; run_sub cmd_backup "$REPLY"; }
++
++menu() {
++    need_root
++    if ! is_installed; then
++        echo "raw_note is not installed in $APP_DIR."
++        if confirm "Install now with defaults?"; then cmd_install; else return 0; fi
++        pause
++    fi
++    while true; do
++        clear 2>/dev/null || true
++        load_env
++        echo "${C_B}raw_note manager${C_N}   $APP_DIR"
++        echo "  public :$PUBLIC_PORT -> $PUBLIC_DIR"
++        echo "  private:$PRIVATE_PORT -> $PRIVATE_DIR  (user $PRIVATE_USER)"
++        echo
++        echo "   1) Status              2) Start             3) Stop"
++        echo "   4) Restart             5) Logs (Ctrl-C)     6) Update (git pull + rebuild)"
++        echo "   7) Private login       8) Ports             9) Note folders"
++        echo "  10) Listen IP          11) Time zone        12) Backup notes"
++        echo "  13) Uninstall           0) Exit"
++        echo
++        ask "Choose"
++        case "$REPLY" in
++            1)  run_sub cmd_status ;;
++            2)  run_sub cmd_start ;;
++            3)  run_sub cmd_stop ;;
++            4)  run_sub cmd_restart ;;
++            5)  run_sub cmd_logs ;;
++            6)  run_sub cmd_update ;;
++            7)  menu_passwd ;;
++            8)  menu_ports ;;
++            9)  menu_data ;;
++            10) menu_bind ;;
++            11) menu_tz ;;
++            12) menu_backup ;;
++            13) run_sub cmd_uninstall; is_installed || exit 0 ;;
++            0|q|Q) exit 0 ;;
++            *)  warn "Unknown choice: $REPLY" ;;
++        esac
++        pause
++    done
++}
++
++# ------------------------------------------------------------------ main ----
++main() {
++    if [ $# -eq 0 ]; then
++        [ -t 0 ] || { usage; echo; die "The menu needs a terminal. Use: bash <(curl -Ls4 URL)  or  raw_note"; }
++        menu
++        return
++    fi
++    # Non-interactive command: when this script comes through a pipe
++    # (curl | bash), stop child programs from reading the rest of the pipe.
++    [ -t 0 ] || exec </dev/null
++    case "$1" in
++        --install)   cmd_install ;;
++        --status)    cmd_status ;;
++        --start)     cmd_start ;;
++        --stop)      cmd_stop ;;
++        --restart)   cmd_restart ;;
++        --logs)      cmd_logs ;;
++        --update)    cmd_update ;;
++        --passwd)    [ $# -eq 3 ] || die "Usage: --passwd USER PASS"; cmd_passwd "$2" "$3" ;;
++        --ports)     [ $# -eq 3 ] || die "Usage: --ports PUBLIC PRIVATE"; cmd_ports "$2" "$3" ;;
++        --bind)      [ $# -eq 2 ] || die "Usage: --bind IP"; cmd_bind "$2" ;;
++        --tz)        [ $# -eq 2 ] || die "Usage: --tz ZONE"; cmd_tz "$2" ;;
++        --data)      [ $# -ge 3 ] && [ $# -le 4 ] || die "Usage: --data PUBLIC_DIR PRIVATE_DIR [move|copy|none]"
++                     cmd_data "$2" "$3" "${4:-move}" ;;
++        --backup)    cmd_backup "${2:-}" ;;
++        --uninstall) cmd_uninstall "${2:-}" ;;
++        -h|--help|help) usage ;;
++        *)           usage; echo; die "Unknown option: $1" ;;
++    esac
++}
++
++main "$@"
++exit $?
+diff --git a/list.php b/list.php
+index 6392ba2..7221b84 100644
+--- a/list.php
++++ b/list.php
+@@ -28,6 +28,8 @@ foreach ($files as $file) {
+         'name' => $note_name,
+         'preview' => mb_substr($note_content, 0, 200, 'UTF-8'),
+         'size' => strlen($note_content),
++        // Characters, not bytes: a short Chinese note is not "truncated".
++        'more' => mb_strlen($note_content, 'UTF-8') > 200,
+         'modified' => $modified_time
+     ];
+ }
+@@ -326,7 +328,7 @@ function human_size($bytes) {
+                             <td class="col-preview">
+                                 <?php if ($note['size'] > 0): ?>
+                                     <a href="<?php print $note_url; ?>" class="note-preview" title="<?php print $safe_name; ?>">
+-                                        <?php print htmlspecialchars($note['preview'], ENT_QUOTES, 'UTF-8'); ?><?php if ($note['size'] > 200): ?>...<?php endif; ?>
++                                        <?php print htmlspecialchars($note['preview'], ENT_QUOTES, 'UTF-8'); ?><?php if ($note['more']): ?>...<?php endif; ?>
+                                     </a>
+                                 <?php else: ?>
+                                     <a href="<?php print $note_url; ?>" class="note-preview empty-preview" title="<?php print $safe_name; ?>">(empty) <?php print $safe_name; ?></a>
+diff --git a/minimalist-web-notepad-entrypoint b/minimalist-web-notepad-entrypoint
+index 8e99939..192fd59 100755
+--- a/minimalist-web-notepad-entrypoint
++++ b/minimalist-web-notepad-entrypoint
+@@ -10,5 +10,38 @@ mkdir -p "$NOTES_PATH"
+ cp "/var/www/html/notes.htaccess" "$NOTES_PATH/.htaccess"
+ chown -R www-data:www-data "$NOTES_PATH"
+ 
++# Optional HTTP basic auth for the whole site.
++#   MWN_AUTH_USER + MWN_AUTH_PASS set  -> auth on
++#   both empty                          -> auth off
++#   MWN_AUTH_REQUIRED=1 and either one empty -> exit (never serve private
++#                                               notes without a password)
++AUTH_CONF=/etc/apache2/conf-enabled/zz-raw-note-auth.conf
++AUTH_FILE=/etc/apache2/raw_note.htpasswd
++rm -f "$AUTH_CONF" "$AUTH_FILE"
++
++if [ -n "$MWN_AUTH_USER" ] && [ -n "$MWN_AUTH_PASS" ]; then
++    # The password is read from the environment, not passed as an argument,
++    # so it never shows in the process list. bcrypt ($2y$) hash.
++    php -r '
++        $u = getenv("MWN_AUTH_USER");
++        if (strpos($u, ":") !== false) { fwrite(STDERR, "MWN_AUTH_USER must not contain \":\"\n"); exit(1); }
++        echo $u, ":", password_hash(getenv("MWN_AUTH_PASS"), PASSWORD_BCRYPT), "\n";
++    ' > "$AUTH_FILE"
++    chown root:www-data "$AUTH_FILE"
++    chmod 640 "$AUTH_FILE"
++    cat > "$AUTH_CONF" <<EOF
++<Directory /var/www/html>
++    AuthType Basic
++    AuthName "raw_note"
++    AuthUserFile $AUTH_FILE
++    Require valid-user
++</Directory>
++EOF
++    echo "raw_note: basic auth ON for user '$MWN_AUTH_USER'"
++elif [ "$MWN_AUTH_REQUIRED" = "1" ]; then
++    echo "raw_note: MWN_AUTH_REQUIRED=1 but MWN_AUTH_USER or MWN_AUTH_PASS is empty. Refusing to start." >&2
++    exit 1
++fi
++
+ # Run default entrypoint
+ exec docker-php-entrypoint "$@"
+diff --git a/search.php b/search.php
+index 45ab65a..61ccf94 100644
+--- a/search.php
++++ b/search.php
+@@ -30,16 +30,18 @@ if ($query !== '') {
+         if (stripos($note_name, $query) !== false) {
+             $title_results[] = [
+                 'name' => $note_name,
+-                'preview' => mb_substr($note_content, 0, 100)
++                'preview' => mb_substr($note_content, 0, 100, 'UTF-8'),
++                'more' => mb_strlen($note_content, 'UTF-8') > 100
+             ];
+         }
+         // Step 2: Search content
+-        elseif (stripos($note_content, $query) !== false) {
+-            // Find the position and extract context
+-            $pos = stripos($note_content, $query);
++        // mb_* functions: positions are counted in characters, so the
++        // snippet is centred on the match for Chinese / multibyte text too
++        // (stripos() returns a byte offset, which mb_substr() misreads).
++        elseif (($pos = mb_stripos($note_content, $query, 0, 'UTF-8')) !== false) {
+             $start = max(0, $pos - 50);
+-            $preview = mb_substr($note_content, $start, 150);
+-            
++            $preview = mb_substr($note_content, $start, 150, 'UTF-8');
++
+             $content_results[] = [
+                 'name' => $note_name,
+                 'preview' => $preview
+@@ -212,7 +214,7 @@ if ($query !== '') {
+                             <span class="title">
+                                 <?php 
+                                     $highlighted = preg_replace(
+-                                        '/(' . preg_quote($query, '/') . ')/i', 
++                                        '/(' . preg_quote($query, '/') . ')/iu', 
+                                         '<span class="highlight">$1</span>', 
+                                         htmlspecialchars($result['name'], ENT_QUOTES, 'UTF-8')
+                                     );
+@@ -221,7 +223,7 @@ if ($query !== '') {
+                             </span>
+                             <span class="snippet">
+                                 <?php print htmlspecialchars($result['preview'], ENT_QUOTES, 'UTF-8'); ?>
+-                                <?php if (strlen($result['preview']) >= 100): ?>...<?php endif; ?>
++                                <?php if ($result['more']): ?>...<?php endif; ?>
+                             </span>
+                         </a>
+                     <?php endforeach; ?>
+@@ -239,7 +241,7 @@ if ($query !== '') {
+                             <span class="snippet">
+                                 ...<?php 
+                                     $highlighted = preg_replace(
+-                                        '/(' . preg_quote($query, '/') . ')/i', 
++                                        '/(' . preg_quote($query, '/') . ')/iu', 
+                                         '<span class="highlight">$1</span>', 
+                                         htmlspecialchars($result['preview'], ENT_QUOTES, 'UTF-8')
+                                     );
+diff --git a/token_badge.js b/token_badge.js
+index 058b0a3..fda6258 100644
+--- a/token_badge.js
++++ b/token_badge.js
+@@ -6,25 +6,30 @@
+  * copy its badge block over Section A. Nothing in Section B depends on it
+  * except setBadge().
+  *
+- * Section B fetches counts for the SAVED note from count.php:
++ * Section B fetches counts for the SAVED note from GET /<note>?tokens=1
++ * (handled by index.php):
+  *   - once when the page opens
+  *   - after every successful save ('note-saved' event fired by script.js)
+  * The note text is never sent; the tokenizer reads the saved file.
+  *
+  * Badge values:  number = count,  "—" = note not saved yet / empty,
+  *                "too big" = note over the tokenizer's size limit,
+- *                "err" = tokenizer unreachable or failed (next save retries).
++ *                "err 502" etc. = server answered with that HTTP status
++ *                  (502 = tokenizer container down or unreachable),
++ *                "err net" = request never got an answer: network down,
++ *                  timeout, or blocked inside the browser by an extension,
++ *                "err json" = HTTP 200 but the body was not JSON.
++ * The next save retries in every error case. Details go to the console.
+  *
+- * index.php passes the note name and count.php URL as data attributes on
+- * this script tag: data-note, data-count-url.
++ * index.php passes the URL as a data attribute on this script tag:
++ * data-tokens-url.
+  */
+ (function () {
+   'use strict';
+ 
+   const me = document.currentScript;
+-  const NOTE = me && me.dataset.note;
+-  const COUNT_URL = me && me.dataset.countUrl;
+-  if (!NOTE || !COUNT_URL) return;
++  const TOKENS_URL = me && me.dataset.tokensUrl;
++  if (!TOKENS_URL) return;
+ 
+   // ===== Section A: badge (copied unchanged from raw_token_counter.js) =====
+ 
+@@ -103,7 +108,7 @@
+ 
+   // ===== Section B: counts for the saved note =====
+ 
+-  // Must be longer than count.php's 30 s curl timeout.
++  // Must be longer than index.php's 30 s curl timeout.
+   const TIMEOUT_MS = 35000;
+ 
+   let inFlight = false; // a count request is running
+@@ -124,19 +129,31 @@
+     const ctrl = new AbortController();
+     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+ 
+-    fetch(COUNT_URL + '?note=' + encodeURIComponent(NOTE), {
++    fetch(TOKENS_URL, {
+       cache: 'no-store',
+       signal: ctrl.signal
+     })
+       .then((res) => {
+         if (res.status === 404) { setBadge('—', '—'); return; }
+         if (res.status === 413) { setBadge('too big', 'too big'); return; }
+-        if (!res.ok) throw new Error('HTTP ' + res.status);
++        if (!res.ok) {
++          return res.text().then((t) => {
++            console.warn('[token_badge] HTTP ' + res.status, t);
++            setBadge('err ' + res.status, 'err ' + res.status);
++          });
++        }
+         return res.json().then((j) => setBadge(fmt(j.o), fmt(j.anthropic)));
+       })
+       .catch((e) => {
+-        console.warn('[token_badge]', e);
+-        setBadge('err', 'err');
++        if (e && e.name === 'SyntaxError') {
++          // HTTP 200 but the body was not JSON.
++          console.warn('[token_badge] bad JSON from ' + TOKENS_URL, e);
++          setBadge('err json', 'err json');
++          return;
++        }
++        // fetch() itself failed: no HTTP answer reached the page.
++        console.warn('[token_badge] no answer from ' + TOKENS_URL, e);
++        setBadge('err net', 'err net');
+       })
+       .finally(() => {
+         clearTimeout(timer);
+diff --git a/tokenizer/app.py b/tokenizer/app.py
+index 186a31c..a9c14ee 100644
+--- a/tokenizer/app.py
++++ b/tokenizer/app.py
+@@ -1,12 +1,15 @@
+ """Token-count service for Minimalist Web Notepad.
+ 
+ Endpoints (GET only):
+-    /health         -> 200 {"ok": true}
+-    /count/<name>   -> 200 {"o": <int>, "anthropic": <int>}
+-                       400 bad name, 404 no such note, 413 note too large
++    /health                 -> 200 {"ok": true}
++    /count/<space>/<name>   -> 200 {"o": <int>, "anthropic": <int>}
++                               400 bad name or unknown space,
++                               404 no such note, 413 note too large
+ 
+ The note text is never sent to this service. It reads the SAVED note file
+-from NOTES_DIR (a read-only mount of the notepad's save folder).
++NOTES_DIR/<space>/<name>. Each notepad's save folder is mounted read-only at
++NOTES_DIR/<space>; NOTE_SPACES lists the allowed space names
++(default "public,private").
+ 
+ Tokenizers (pin versions in requirements.txt so counts never drift):
+     "o"         tiktoken, encoding O_ENCODING (default o200k_base)
+@@ -29,6 +32,9 @@ import tiktoken
+ from tokenizers import Tokenizer
+ 
+ NOTES_DIR = os.environ.get("NOTES_DIR", "/notes")
++NOTE_SPACES = frozenset(
++    s.strip() for s in os.environ.get("NOTE_SPACES", "public,private").split(",") if s.strip()
++)
+ O_ENCODING = os.environ.get("O_ENCODING", "o200k_base")
+ CLAUDE_TOKENIZER = os.environ.get("CLAUDE_TOKENIZER", "/opt/vocab/claude-tokenizer.json")
+ MAX_BYTES = int(os.environ.get("MAX_BYTES", str(16 * 1024 * 1024)))
+@@ -106,8 +112,8 @@ def _cache_put(key, val):
+             _cache.popitem(last=False)
+ 
+ 
+-def count_note(name):
+-    path = os.path.join(NOTES_DIR, name)
++def count_note(space, name):
++    path = os.path.join(NOTES_DIR, space, name)
+     # O_NOFOLLOW: never follow a symlink out of the notes folder.
+     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+     with os.fdopen(fd, "rb") as f:
+@@ -116,7 +122,7 @@ def count_note(name):
+         st = os.fstat(f.fileno())
+         if not stat.S_ISREG(st.st_mode):
+             raise FileNotFoundError(path)
+-        key = (name, st.st_mtime_ns, st.st_size)
++        key = (space, name, st.st_mtime_ns, st.st_size)
+         cached = _cache_get(key)
+         if cached is not None:
+             return cached
+@@ -150,11 +156,13 @@ def application(environ, start_response):
+         return _reply(start_response, "200 OK", {"ok": True})
+ 
+     if path.startswith("/count/"):
+-        name = path[len("/count/"):]
++        space, _, name = path[len("/count/"):].partition("/")
++        if space not in NOTE_SPACES:
++            return _reply(start_response, "400 Bad Request", {"error": "unknown space"})
+         if not NAME_RE.fullmatch(name):
+             return _reply(start_response, "400 Bad Request", {"error": "bad note name"})
+         try:
+-            return _reply(start_response, "200 OK", count_note(name))
++            return _reply(start_response, "200 OK", count_note(space, name))
+         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+             return _reply(start_response, "404 Not Found", {"error": "no such note"})
+         except OSError as e:
+-- 
+2.43.0
+
