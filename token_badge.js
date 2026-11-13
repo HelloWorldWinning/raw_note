@@ -6,25 +6,30 @@
  * copy its badge block over Section A. Nothing in Section B depends on it
  * except setBadge().
  *
- * Section B fetches counts for the SAVED note from count.php:
+ * Section B fetches counts for the SAVED note from GET /<note>?tokens=1
+ * (handled by index.php):
  *   - once when the page opens
  *   - after every successful save ('note-saved' event fired by script.js)
  * The note text is never sent; the tokenizer reads the saved file.
  *
  * Badge values:  number = count,  "—" = note not saved yet / empty,
  *                "too big" = note over the tokenizer's size limit,
- *                "err" = tokenizer unreachable or failed (next save retries).
+ *                "err 502" etc. = server answered with that HTTP status
+ *                  (502 = tokenizer container down or unreachable),
+ *                "err net" = request never got an answer: network down,
+ *                  timeout, or blocked inside the browser by an extension,
+ *                "err json" = HTTP 200 but the body was not JSON.
+ * The next save retries in every error case. Details go to the console.
  *
- * index.php passes the note name and count.php URL as data attributes on
- * this script tag: data-note, data-count-url.
+ * index.php passes the URL as a data attribute on this script tag:
+ * data-tokens-url.
  */
 (function () {
   'use strict';
 
   const me = document.currentScript;
-  const NOTE = me && me.dataset.note;
-  const COUNT_URL = me && me.dataset.countUrl;
-  if (!NOTE || !COUNT_URL) return;
+  const TOKENS_URL = me && me.dataset.tokensUrl;
+  if (!TOKENS_URL) return;
 
   // ===== Section A: badge (copied unchanged from raw_token_counter.js) =====
 
@@ -103,7 +108,7 @@
 
   // ===== Section B: counts for the saved note =====
 
-  // Must be longer than count.php's 30 s curl timeout.
+  // Must be longer than index.php's 30 s curl timeout.
   const TIMEOUT_MS = 35000;
 
   let inFlight = false; // a count request is running
@@ -124,19 +129,31 @@
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
-    fetch(COUNT_URL + '?note=' + encodeURIComponent(NOTE), {
+    fetch(TOKENS_URL, {
       cache: 'no-store',
       signal: ctrl.signal
     })
       .then((res) => {
         if (res.status === 404) { setBadge('—', '—'); return; }
         if (res.status === 413) { setBadge('too big', 'too big'); return; }
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+          return res.text().then((t) => {
+            console.warn('[token_badge] HTTP ' + res.status, t);
+            setBadge('err ' + res.status, 'err ' + res.status);
+          });
+        }
         return res.json().then((j) => setBadge(fmt(j.o), fmt(j.anthropic)));
       })
       .catch((e) => {
-        console.warn('[token_badge]', e);
-        setBadge('err', 'err');
+        if (e && e.name === 'SyntaxError') {
+          // HTTP 200 but the body was not JSON.
+          console.warn('[token_badge] bad JSON from ' + TOKENS_URL, e);
+          setBadge('err json', 'err json');
+          return;
+        }
+        // fetch() itself failed: no HTTP answer reached the page.
+        console.warn('[token_badge] no answer from ' + TOKENS_URL, e);
+        setBadge('err net', 'err net');
       })
       .finally(() => {
         clearTimeout(timer);

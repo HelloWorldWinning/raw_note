@@ -28,6 +28,8 @@ foreach ($files as $file) {
         'name' => $note_name,
         'preview' => mb_substr($note_content, 0, 200, 'UTF-8'),
         'size' => strlen($note_content),
+        // Characters, not bytes: a short Chinese note is not "truncated".
+        'more' => mb_strlen($note_content, 'UTF-8') > 200,
         'modified' => $modified_time
     ];
 }
@@ -326,7 +328,7 @@ function human_size($bytes) {
                             <td class="col-preview">
                                 <?php if ($note['size'] > 0): ?>
                                     <a href="<?php print $note_url; ?>" class="note-preview" title="<?php print $safe_name; ?>">
-                                        <?php print htmlspecialchars($note['preview'], ENT_QUOTES, 'UTF-8'); ?><?php if ($note['size'] > 200): ?>...<?php endif; ?>
+                                        <?php print htmlspecialchars($note['preview'], ENT_QUOTES, 'UTF-8'); ?><?php if ($note['more']): ?>...<?php endif; ?>
                                     </a>
                                 <?php else: ?>
                                     <a href="<?php print $note_url; ?>" class="note-preview empty-preview" title="<?php print $safe_name; ?>">(empty) <?php print $safe_name; ?></a>

@@ -30,16 +30,18 @@ if ($query !== '') {
         if (stripos($note_name, $query) !== false) {
             $title_results[] = [
                 'name' => $note_name,
-                'preview' => mb_substr($note_content, 0, 100)
+                'preview' => mb_substr($note_content, 0, 100, 'UTF-8'),
+                'more' => mb_strlen($note_content, 'UTF-8') > 100
             ];
         }
         // Step 2: Search content
-        elseif (stripos($note_content, $query) !== false) {
-            // Find the position and extract context
-            $pos = stripos($note_content, $query);
+        // mb_* functions: positions are counted in characters, so the
+        // snippet is centred on the match for Chinese / multibyte text too
+        // (stripos() returns a byte offset, which mb_substr() misreads).
+        elseif (($pos = mb_stripos($note_content, $query, 0, 'UTF-8')) !== false) {
             $start = max(0, $pos - 50);
-            $preview = mb_substr($note_content, $start, 150);
-            
+            $preview = mb_substr($note_content, $start, 150, 'UTF-8');
+
             $content_results[] = [
                 'name' => $note_name,
                 'preview' => $preview
@@ -212,7 +214,7 @@ if ($query !== '') {
                             <span class="title">
                                 <?php 
                                     $highlighted = preg_replace(
-                                        '/(' . preg_quote($query, '/') . ')/i', 
+                                        '/(' . preg_quote($query, '/') . ')/iu', 
                                         '<span class="highlight">$1</span>', 
                                         htmlspecialchars($result['name'], ENT_QUOTES, 'UTF-8')
                                     );
@@ -221,7 +223,7 @@ if ($query !== '') {
                             </span>
                             <span class="snippet">
                                 <?php print htmlspecialchars($result['preview'], ENT_QUOTES, 'UTF-8'); ?>
-                                <?php if (strlen($result['preview']) >= 100): ?>...<?php endif; ?>
+                                <?php if ($result['more']): ?>...<?php endif; ?>
                             </span>
                         </a>
                     <?php endforeach; ?>
@@ -239,7 +241,7 @@ if ($query !== '') {
                             <span class="snippet">
                                 ...<?php 
                                     $highlighted = preg_replace(
-                                        '/(' . preg_quote($query, '/') . ')/i', 
+                                        '/(' . preg_quote($query, '/') . ')/iu', 
                                         '<span class="highlight">$1</span>', 
                                         htmlspecialchars($result['preview'], ENT_QUOTES, 'UTF-8')
                                     );

@@ -1,12 +1,15 @@
 """Token-count service for Minimalist Web Notepad.
 
 Endpoints (GET only):
-    /health         -> 200 {"ok": true}
-    /count/<name>   -> 200 {"o": <int>, "anthropic": <int>}
-                       400 bad name, 404 no such note, 413 note too large
+    /health                 -> 200 {"ok": true}
+    /count/<space>/<name>   -> 200 {"o": <int>, "anthropic": <int>}
+                               400 bad name or unknown space,
+                               404 no such note, 413 note too large
 
 The note text is never sent to this service. It reads the SAVED note file
-from NOTES_DIR (a read-only mount of the notepad's save folder).
+NOTES_DIR/<space>/<name>. Each notepad's save folder is mounted read-only at
+NOTES_DIR/<space>; NOTE_SPACES lists the allowed space names
+(default "public,private").
 
 Tokenizers (pin versions in requirements.txt so counts never drift):
     "o"         tiktoken, encoding O_ENCODING (default o200k_base)
@@ -29,6 +32,9 @@ import tiktoken
 from tokenizers import Tokenizer
 
 NOTES_DIR = os.environ.get("NOTES_DIR", "/notes")
+NOTE_SPACES = frozenset(
+    s.strip() for s in os.environ.get("NOTE_SPACES", "public,private").split(",") if s.strip()
+)
 O_ENCODING = os.environ.get("O_ENCODING", "o200k_base")
 CLAUDE_TOKENIZER = os.environ.get("CLAUDE_TOKENIZER", "/opt/vocab/claude-tokenizer.json")
 MAX_BYTES = int(os.environ.get("MAX_BYTES", str(16 * 1024 * 1024)))
@@ -106,8 +112,8 @@ def _cache_put(key, val):
             _cache.popitem(last=False)
 
 
-def count_note(name):
-    path = os.path.join(NOTES_DIR, name)
+def count_note(space, name):
+    path = os.path.join(NOTES_DIR, space, name)
     # O_NOFOLLOW: never follow a symlink out of the notes folder.
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as f:
@@ -116,7 +122,7 @@ def count_note(name):
         st = os.fstat(f.fileno())
         if not stat.S_ISREG(st.st_mode):
             raise FileNotFoundError(path)
-        key = (name, st.st_mtime_ns, st.st_size)
+        key = (space, name, st.st_mtime_ns, st.st_size)
         cached = _cache_get(key)
         if cached is not None:
             return cached
@@ -150,11 +156,13 @@ def application(environ, start_response):
         return _reply(start_response, "200 OK", {"ok": True})
 
     if path.startswith("/count/"):
-        name = path[len("/count/"):]
+        space, _, name = path[len("/count/"):].partition("/")
+        if space not in NOTE_SPACES:
+            return _reply(start_response, "400 Bad Request", {"error": "unknown space"})
         if not NAME_RE.fullmatch(name):
             return _reply(start_response, "400 Bad Request", {"error": "bad note name"})
         try:
-            return _reply(start_response, "200 OK", count_note(name))
+            return _reply(start_response, "200 OK", count_note(space, name))
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             return _reply(start_response, "404 Not Found", {"error": "no such note"})
         except OSError as e:

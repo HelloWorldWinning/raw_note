@@ -1,0 +1,6 @@
+# Settings written by install_manger.sh (contains the private password)
+.env
+.env.tmp.*
+
+# Python caches
+__pycache__/

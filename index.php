@@ -72,6 +72,41 @@ $note = $_GET['note'];
 $path = $save_path . '/' . $note;
 
 // ---------------------------------------------------------------------------
+// Token counts of this SAVED note, for token_badge.js.
+//   GET /<note>?tokens=1  ->  {"o": <int>, "anthropic": <int>}
+// Served from the note's own URL on purpose: the old URL "count.php?note=..."
+// matches the EasyPrivacy rule "/count.php?", so ad blockers dropped the
+// request inside the browser and the badge showed "err".
+// The tokenizer reads the saved file itself; the note text is not re-sent.
+// Tokenizer status codes are passed through (200, 400, 404, 413).
+// 502 = tokenizer unreachable.
+// ---------------------------------------------------------------------------
+if (isset($_GET['tokens']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    header('Content-Type: application/json');
+
+    // Which folder of the tokenizer's /notes holds this notepad's files.
+    $space = getenv('NOTE_SPACE') ?: 'public';
+    $base  = rtrim(getenv('TOKENIZER_URL') ?: 'http://tokenizer:6969', '/');
+
+    $ch = curl_init($base . '/count/' . rawurlencode($space) . '/' . $note);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT        => 30,
+    ]);
+    $resp = curl_exec($ch);
+
+    if ($resp === false) {
+        http_response_code(502);
+        exit(json_encode(['error' => 'tokenizer unreachable: ' . curl_error($ch)]));
+    }
+
+    http_response_code(curl_getinfo($ch, CURLINFO_RESPONSE_CODE));
+    exit($resp);
+}
+
+// ---------------------------------------------------------------------------
 // Save.
 // Accepts three body formats:
 //   1. Raw text body (what script.js sends):      Content-Type: text/plain
@@ -167,8 +202,7 @@ if (isset($_GET['raw']) || strpos($ua, 'curl') === 0 || strpos($ua, 'Wget') === 
     <pre id="printable"></pre>
     <script src="<?php print $base_url; ?>/script.js?v=<?php print filemtime(__DIR__ . '/script.js'); ?>"></script>
     <script src="<?php print $base_url; ?>/token_badge.js?v=<?php print filemtime(__DIR__ . '/token_badge.js'); ?>"
-            data-note="<?php print $note; ?>"
-            data-count-url="<?php print $base_url; ?>/count.php"></script>
+            data-tokens-url="<?php print $base_url . '/' . $note; ?>?tokens=1"></script>
 
 </body>
 </html>

@@ -1,24 +1,58 @@
+# raw_note: two notepads (public + password-protected) and one tokenizer.
+#
+# Every ${VAR:-default} below can be set in .env next to this file.
+# install_manger.sh writes that .env; without it the defaults are used.
+
+name: raw_note
+
 services:
-  minimalist-web-notepad:
+  # Public notepad: no password.
+  notepad:
     build: .
     ports:
-      - "5555:80"
+      - "${BIND_IP:-0.0.0.0}:${PUBLIC_PORT:-5555}:80"
     volumes:
-      - /data/Minimalist_Web_Notepad:/var/www/html/_tmp
+      - ${PUBLIC_DIR:-/data/raw_note_d}:/var/www/html/_tmp
     environment:
+      - TZ=${TZ:-Australia/Perth}
       - MWN_BASE_URL=
       - MWN_SAVE_PATH=/var/www/html/_tmp
       - TOKENIZER_URL=http://tokenizer:6969
+      - NOTE_SPACE=public          # folder name inside the tokenizer's /notes
     networks:
-      - default   # published port 3090, internet
+      - default   # published port
       - tok       # private link to the tokenizer
     restart: unless-stopped
     # No depends_on: notes must keep working even if the tokenizer is down.
 
+  # Private notepad: HTTP basic auth on every page and API call.
+  notepad-private:
+    build: .
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-7777}:80"
+    volumes:
+      - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/var/www/html/_tmp
+    environment:
+      - TZ=${TZ:-Australia/Perth}
+      - MWN_BASE_URL=
+      - MWN_SAVE_PATH=/var/www/html/_tmp
+      - TOKENIZER_URL=http://tokenizer:6969
+      - NOTE_SPACE=private
+      - MWN_AUTH_REQUIRED=1        # refuse to start without a user and password
+      - MWN_AUTH_USER=${PRIVATE_USER:-a}
+      - MWN_AUTH_PASS=${PRIVATE_PASS:-a}
+    networks:
+      - default
+      - tok
+    restart: unless-stopped
+
   tokenizer:
     build: ./tokenizer
     volumes:
-      - /data/Minimalist_Web_Notepad:/notes:ro
+      - ${PUBLIC_DIR:-/data/raw_note_d}:/notes/public:ro
+      - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/notes/private:ro
+    environment:
+      - NOTE_SPACES=public,private
     networks:
       - tok       # internal only: no published port, no internet
     read_only: true
