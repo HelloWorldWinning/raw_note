@@ -1,0 +1,33 @@
+services:
+  minimalist-web-notepad:
+    build: .
+    ports:
+      - "5555:80"
+    volumes:
+      - /data/Minimalist_Web_Notepad:/var/www/html/_tmp
+    environment:
+      - MWN_BASE_URL=
+      - MWN_SAVE_PATH=/var/www/html/_tmp
+      - TOKENIZER_URL=http://tokenizer:6969
+    networks:
+      - default   # published port 3090, internet
+      - tok       # private link to the tokenizer
+    restart: unless-stopped
+    # No depends_on: notes must keep working even if the tokenizer is down.
+
+  tokenizer:
+    build: ./tokenizer
+    volumes:
+      - /data/Minimalist_Web_Notepad:/notes:ro
+    networks:
+      - tok       # internal only: no published port, no internet
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 768m
+    cpus: 1.5
+    restart: unless-stopped
+
+networks:
+  tok:
+    internal: true
