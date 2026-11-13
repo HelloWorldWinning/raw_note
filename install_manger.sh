@@ -14,15 +14,15 @@
 #
 # Default setup:
 #   public  notepad  http://<ip>:5555  no password    notes in /data/raw_note_d
-#   private notepad  http://<ip>:7777  user a / pass a notes in /data/raw_note_d_passwd
-# Settings live in /opt/raw_note/.env (mode 600). Override the install folder
+#   private notepad  http://<ip>:4444  user a / pass a notes in /data/raw_note_d_passwd
+# Settings live in /root/raw_note_d/.env (mode 600). Override the install folder
 # with RAW_NOTE_DIR=/some/dir.
 
 set -Eeuo pipefail
 
 REPO_URL="${RAW_NOTE_REPO:-https://github.com/HelloWorldWinning/raw_note.git}"
 BRANCH="${RAW_NOTE_BRANCH:-main}"
-APP_DIR="${RAW_NOTE_DIR:-/opt/raw_note}"
+APP_DIR="${RAW_NOTE_DIR:-/root/raw_note_d}"
 ENV_FILE="$APP_DIR/.env"
 CMD_LINK=/usr/local/bin/raw_note
 PROJECT=raw_note                          # docker compose project name
@@ -35,7 +35,7 @@ ENV_KEYS=(PUBLIC_PORT PUBLIC_DIR PRIVATE_PORT PRIVATE_DIR PRIVATE_USER PRIVATE_P
 declare \
     D_PUBLIC_PORT=5555 \
     D_PUBLIC_DIR=/data/raw_note_d \
-    D_PRIVATE_PORT=7777 \
+    D_PRIVATE_PORT=4444 \
     D_PRIVATE_DIR=/data/raw_note_d_passwd \
     D_PRIVATE_USER=a \
     D_PRIVATE_PASS=a \
@@ -274,11 +274,11 @@ summary() {
     echo "${C_B}raw_note${C_N}  (code: $APP_DIR, settings: $ENV_FILE)"
     printf '  Public   http://%s:%s   no password            notes: %s (%s)\n' \
         "$ip" "$PUBLIC_PORT" "$PUBLIC_DIR" "$(note_count "$PUBLIC_DIR")"
-    printf '  Private  http://%s:%s   user: %s  pass: %s chars  notes: %s (%s)\n' \
-        "$ip" "$PRIVATE_PORT" "$PRIVATE_USER" "${#PRIVATE_PASS}" "$PRIVATE_DIR" "$(note_count "$PRIVATE_DIR")"
+    printf '  Private  http://%s:%s   login: %s / %s   notes: %s (%s)\n' \
+        "$ip" "$PRIVATE_PORT" "$PRIVATE_USER" "$PRIVATE_PASS" "$PRIVATE_DIR" "$(note_count "$PRIVATE_DIR")"
     printf '  Listen IP %s   Time zone %s\n' "$BIND_IP" "$TZ"
     if [ "$PRIVATE_USER" = a ] && [ "$PRIVATE_PASS" = a ]; then
-        warn "The private notepad uses the default login a / a. Change it: raw_note --passwd USER PASS"
+        echo "  Login a / a is the built-in default; nothing to set up. Optional change: raw_note --passwd USER PASS"
     fi
     echo "  Manage: raw_note    (or: raw_note --help)"
 }
@@ -470,7 +470,7 @@ raw_note manager. Run as root.
   --logs                                   follow container logs (Ctrl-C quits)
   --update                                 git pull + rebuild + restart
   --passwd USER PASS                       private notepad login
-  --ports PUBLIC PRIVATE                   e.g. --ports 5555 7777
+  --ports PUBLIC PRIVATE                   e.g. --ports 5555 4444
   --bind IP                                listen IP: 0.0.0.0 = all, 127.0.0.1 = local only
   --tz ZONE                                e.g. --tz Australia/Perth
   --data PUBLIC_DIR PRIVATE_DIR [MODE]     change note folders; MODE: move (default),

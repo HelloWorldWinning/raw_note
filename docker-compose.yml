@@ -29,7 +29,7 @@ services:
   notepad-private:
     build: .
     ports:
-      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-7777}:80"
+      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-4444}:80"
     volumes:
       - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/var/www/html/_tmp
     environment:
@@ -59,7 +59,7 @@ services:
     tmpfs:
       - /tmp
     mem_limit: 768m
-    cpus: 1.5
+    cpus: 1         # cap at 1 core (a limit, nothing is reserved); works on 1-core hosts
     restart: unless-stopped
 
 networks:
