@@ -200,6 +200,7 @@ if (isset($_GET['raw']) || strpos($ua, 'curl') === 0 || strpos($ua, 'Wget') === 
         ?></textarea>
     </div>
     <pre id="printable"></pre>
+    <script src="<?php print $base_url; ?>/editor.js?v=<?php print filemtime(__DIR__ . '/editor.js'); ?>"></script>
     <script src="<?php print $base_url; ?>/script.js?v=<?php print filemtime(__DIR__ . '/script.js'); ?>"></script>
     <script src="<?php print $base_url; ?>/token_badge.js?v=<?php print filemtime(__DIR__ . '/token_badge.js'); ?>"
             data-tokens-url="<?php print $base_url . '/' . $note; ?>?tokens=1"></script>

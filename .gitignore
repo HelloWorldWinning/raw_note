@@ -4,3 +4,6 @@
 
 # Python caches
 __pycache__/
+
+# Editor build (editor.js is the committed build output)
+editor/node_modules/

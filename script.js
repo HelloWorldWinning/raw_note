@@ -1,6 +1,9 @@
 /*! Minimalist Web Notepad | https://github.com/pereorga/minimalist-web-notepad
  *  Optimized save loop: event-driven, debounced, raw (gzip for big notes),
  *  only marks "saved" on HTTP 2xx, warns before closing with unsaved changes.
+ *
+ *  Text access goes through `ed`: the CodeMirror editor from editor.js when
+ *  it loaded (window.rawNoteEditor), otherwise the plain textarea.
  */
 (function () {
     'use strict';
@@ -12,6 +15,11 @@
 
     var textarea  = document.getElementById('content');
     var printable = document.getElementById('printable');
+    var ed = window.rawNoteEditor || {
+        getValue: function () { return textarea.value; },
+        onChange: function (fn) { textarea.addEventListener('input', fn); },
+        focus: function () { textarea.focus({ preventScroll: true }); }
+    };
     var baseTitle = document.title;
     var canGzip   = typeof CompressionStream === 'function';
 
@@ -21,7 +29,11 @@
     var retryDelay = RETRY_MIN;
 
     // Title prefix shows state:  "• note" = unsaved,  "⚠ note" = save failing.
+    // The title is written only when the state changes, not on every key.
+    var shownState = '';
     function setState(prefix) {
+        if (prefix === shownState) return;
+        shownState = prefix;
         document.title = prefix ? prefix + ' ' + baseTitle : baseTitle;
     }
 
@@ -30,9 +42,9 @@
         timer = setTimeout(save, ms);
     }
 
-    // Only the 'input' event marks the note dirty: no full-string comparison
-    // of a huge textarea every second.
-    textarea.addEventListener('input', function () {
+    // Only a change event marks the note dirty: the full text is read only
+    // when saving, never on each keystroke.
+    ed.onChange(function () {
         dirty = true;
         setState('•');
         if (!saving) schedule(IDLE_MS);
@@ -52,7 +64,7 @@
         if (!dirty || saving) return;
         saving = true;
         dirty = false;
-        var text = textarea.value;
+        var text = ed.getValue();
 
         buildBody(text).then(function (b) {
             var headers = { 'Content-Type': 'text/plain; charset=UTF-8' };
@@ -94,11 +106,11 @@
     // Fill the print copy only when printing, instead of keeping a second
     // full copy of the note in the DOM at all times.
     window.addEventListener('beforeprint', function () {
-        printable.textContent = textarea.value;
+        printable.textContent = ed.getValue();
     });
     window.addEventListener('afterprint', function () {
         printable.textContent = '';
     });
 
-    textarea.focus({ preventScroll: true });
+    ed.focus();
 })();

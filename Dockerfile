@@ -10,7 +10,7 @@ RUN a2enmod rewrite \
 
 # Import App
 COPY .htaccess index.php search.php list.php \
-     styles.css script.js token_badge.js favicon.ico notes.htaccess \
+     styles.css editor.js script.js token_badge.js favicon.ico notes.htaccess \
      .Longman_Communication_3000.txt ./
 
 # Entrypoint: notes folder permissions + optional basic auth

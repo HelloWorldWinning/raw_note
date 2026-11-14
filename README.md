@@ -51,3 +51,18 @@ curl http://<ip>:5555/mynote                         # print a note
 curl -u USER:PASS http://<ip>:4444/mynote            # private note
 curl --data-binary @file.txt http://<ip>:5555/mynote # save a note
 ```
+
+## Editor
+
+The note is edited in CodeMirror 6 (`editor.js`), styled to look like the
+plain textarea. It keeps only the visible lines in the page, so typing,
+including Chinese IME input, stays smooth in multi-megabyte notes.
+Cmd/Ctrl+F opens its search bar. If `editor.js` fails to load, the page
+falls back to the plain textarea.
+
+`editor.js` is a committed build output. To rebuild it after changing
+`editor/src/main.js` or updating CodeMirror:
+
+```bash
+cd editor && npm ci && npm run build
+```

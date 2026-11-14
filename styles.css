@@ -33,6 +33,25 @@ body {
     outline: none;
     overscroll-behavior: none;
 }
+/* CodeMirror editor (editor.js) that replaces #content: same look. */
+#editor {
+    height: 100%;
+    background: #fff;
+}
+#editor.cm-focused {
+    outline: none;
+}
+#editor .cm-scroller {
+    overscroll-behavior: none;
+}
+#editor .cm-content {
+    padding-top: 5px;
+    padding-bottom: 5px;
+}
+#editor .cm-line {
+    padding-left: 10px;
+    padding-right: 10px;
+}
 #printable {
     display: none;
 }
@@ -48,6 +67,22 @@ body {
         background: #282923;
         color: #f8f8f2;
         border: 0;
+    }
+    #editor {
+        background: #282923;
+        color: #f8f8f2;
+    }
+    #editor .cm-content {
+        caret-color: #f8f8f2;
+    }
+    #editor .cm-panels {
+        background: #383934;
+        color: #f8f8f2;
+    }
+    #editor .cm-panels input,
+    #editor .cm-panels button {
+        background: #282923;
+        color: #f8f8f2;
     }
 }
 
