@@ -189,7 +189,7 @@ if (isset($_GET['raw']) || strpos($ua, 'curl') === 0 || strpos($ua, 'Wget') === 
     <meta name="generator" content="Minimalist Web Notepad (https://github.com/pereorga/minimalist-web-notepad)">
     <title><?php print $note; ?></title>
     <link rel="shortcut icon" href="<?php print $base_url; ?>/favicon.ico">
-    <link rel="stylesheet" href="<?php print $base_url; ?>/styles.css">
+    <link rel="stylesheet" href="<?php print $base_url; ?>/styles.css?v=<?php print filemtime(__DIR__ . '/styles.css'); ?>">
 </head>
 <body>
     <div class="container">

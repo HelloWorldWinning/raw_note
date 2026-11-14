@@ -46,6 +46,20 @@ import { search, searchKeymap } from '@codemirror/search';
           { key: 'Backspace', run: deleteCharBackwardStrict },
         ].concat(searchKeymap, historyKeymap, standardKeymap)),
         EditorView.lineWrapping,
+        // Layout the editor needs to work, kept here and not only in
+        // styles.css: a stale cached styles.css must not break scrolling.
+        //   height 100%  -> editor fills the window and scrolls inside;
+        //                   without it the editor is as tall as the whole
+        //                   note, the page cannot scroll, the cursor goes
+        //                   off screen.
+        //   outline none -> no dotted focus box (CodeMirror's default).
+        EditorView.theme({
+          '&': { height: '100%' },
+          '&.cm-focused': { outline: 'none' },
+          '.cm-scroller': { overflow: 'auto', overscrollBehavior: 'none' },
+          '.cm-content': { paddingTop: '5px', paddingBottom: '5px' },
+          '.cm-line': { paddingLeft: '10px', paddingRight: '10px' },
+        }),
         EditorState.tabSize.of(8),   // textarea default
         EditorView.contentAttributes.of({
           spellcheck: 'false',

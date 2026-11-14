@@ -63,7 +63,7 @@ function human_size($bytes) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>All Notes</title>
     <link rel="shortcut icon" href="<?php print $base_url; ?>/favicon.ico">
-    <link rel="stylesheet" href="<?php print $base_url; ?>/styles.css">
+    <link rel="stylesheet" href="<?php print $base_url; ?>/styles.css?v=<?php print filemtime(__DIR__ . '/styles.css'); ?>">
     <style>
         * {
             box-sizing: border-box;
