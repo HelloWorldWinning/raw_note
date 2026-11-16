@@ -1,0 +1,1347 @@
+<docs_in_folder>
+
+<file_manifest>
+Root directory: /data/my_github_projects_d/raw_note
+Total files: 9
+Order: manifest and content sections use the same file IDs.
+Metadata escaping: XML entities; content is copied verbatim.
+
+file_001  /data/my_github_projects_d/raw_note/.htaccess
+file_002  /data/my_github_projects_d/raw_note/notes.htaccess
+file_003  /data/my_github_projects_d/raw_note/install_manger.sh
+file_004  /data/my_github_projects_d/raw_note/docker-compose.yml
+file_005  /data/my_github_projects_d/raw_note/script.js
+file_006  /data/my_github_projects_d/raw_note/Dockerfile
+file_007  /data/my_github_projects_d/raw_note/styles.css
+file_008  /data/my_github_projects_d/raw_note/index.php
+file_009  /data/my_github_projects_d/raw_note/editor/src/main.js
+</file_manifest>
+
+<file_001>
+File name: .htaccess
+Absolute path: /data/my_github_projects_d/raw_note/.htaccess
+cat /data/my_github_projects_d/raw_note/.htaccess
+<content>
+Options -Indexes
+RewriteEngine On
+
+# [QSA,L] added to preserve query parameters like ?q=search_term
+RewriteRule ^([a-zA-Z0-9_-]+)$ index.php?note=$1 [QSA,L]
+
+<IfModule mod_headers.c>
+    Header set X-Robots-Tag: "noindex, nofollow"
+</IfModule>
+
+# Uncomment the lines below to enable basic authentication.
+# See https://httpd.apache.org/docs/current/programs/htpasswd.html for generating your .htpasswd
+
+# AuthType basic
+# AuthName "website.name"
+# AuthUserFile "/home/user/update-path-to.htpasswd"
+# Require valid-user
+
+</content>
+</file_001>
+
+<file_002>
+File name: notes.htaccess
+Absolute path: /data/my_github_projects_d/raw_note/notes.htaccess
+cat /data/my_github_projects_d/raw_note/notes.htaccess
+<content>
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+</IfModule>
+
+</content>
+</file_002>
+
+<file_003>
+File name: install_manger.sh
+Absolute path: /data/my_github_projects_d/raw_note/install_manger.sh
+cat /data/my_github_projects_d/raw_note/install_manger.sh
+<content>
+#!/usr/bin/env bash
+# install_manger.sh - install and manage raw_note
+# (Minimalist Web Notepad + token badge, two notepads + tokenizer in Docker)
+#
+#   bash install_manger.sh --install    default install, asks nothing
+#   bash install_manger.sh              interactive manager menu
+#   bash install_manger.sh --help       all commands
+#
+# From GitHub:
+#   curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh | bash -s -- --install
+#   bash <(curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh)
+#
+# After install, the command "raw_note" runs this script (menu or same flags).
+#
+# Default setup:
+#   public  notepad  http://<ip>:5555  no password    notes in /data/raw_note_d
+#   private notepad  http://<ip>:4444  user a / pass a notes in /data/raw_note_d_passwd
+# Settings live in /root/raw_note_d/.env (mode 600). Override the install folder
+# with RAW_NOTE_DIR=/some/dir.
+
+set -Eeuo pipefail
+
+REPO_URL="${RAW_NOTE_REPO:-https://github.com/HelloWorldWinning/raw_note.git}"
+BRANCH="${RAW_NOTE_BRANCH:-main}"
+APP_DIR="${RAW_NOTE_DIR:-/root/raw_note_d}"
+ENV_FILE="$APP_DIR/.env"
+CMD_LINK=/usr/local/bin/raw_note
+PROJECT=raw_note                          # docker compose project name
+OLD_DATA_DIR=/data/Minimalist_Web_Notepad # notes of the old single-notepad setup
+BACKUP_DIR_DEFAULT=/data/raw_note_backup
+
+# Settings stored in .env, with their defaults.
+ENV_KEYS=(PUBLIC_PORT PUBLIC_DIR PRIVATE_PORT PRIVATE_DIR PRIVATE_USER PRIVATE_PASS BIND_IP TZ)
+# shellcheck disable=SC2034  # read indirectly as ${!d} in load_env
+declare \
+    D_PUBLIC_PORT=5555 \
+    D_PUBLIC_DIR=/data/raw_note_d \
+    D_PRIVATE_PORT=4444 \
+    D_PRIVATE_DIR=/data/raw_note_d_passwd \
+    D_PRIVATE_USER=a \
+    D_PRIVATE_PASS=a \
+    D_BIND_IP=0.0.0.0 \
+    D_TZ=Australia/Perth
+
+# ---------------------------------------------------------------- output ----
+if [ -t 1 ]; then
+    C_R=$'\e[31m'; C_G=$'\e[32m'; C_Y=$'\e[33m'; C_B=$'\e[1m'; C_N=$'\e[0m'
+else
+    C_R=''; C_G=''; C_Y=''; C_B=''; C_N=''
+fi
+info() { printf '%s==>%s %s\n' "$C_G" "$C_N" "$*"; }
+warn() { printf '%sWARN:%s %s\n' "$C_Y" "$C_N" "$*" >&2; }
+die()  { printf '%sERROR:%s %s\n' "$C_R" "$C_N" "$*" >&2; exit 1; }
+
+# --------------------------------------------------------------- helpers ----
+need_root() {
+    [ "$(id -u)" -eq 0 ] || die "Run as root, for example: sudo bash install_manger.sh $*"
+}
+
+is_installed() { [ -f "$APP_DIR/docker-compose.yml" ] && [ -f "$ENV_FILE" ]; }
+
+need_installed() {
+    is_installed || die "raw_note is not installed in $APP_DIR. Run: bash install_manger.sh --install"
+}
+
+dc() {
+    docker compose --project-name "$PROJECT" --project-directory "$APP_DIR" \
+        -f "$APP_DIR/docker-compose.yml" --env-file "$ENV_FILE" "$@"
+}
+
+# Read .env into shell variables. Missing keys get the defaults.
+# Parsed line by line (not sourced), so file content is never executed.
+load_env() {
+    local k line v
+    for k in "${ENV_KEYS[@]}"; do
+        local d="D_$k"
+        printf -v "$k" '%s' "${!d}"
+    done
+    [ -f "$ENV_FILE" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        k=${line%%=*}
+        v=${line#*=}
+        v=${v#\'}; v=${v%\'}
+        case " ${ENV_KEYS[*]} " in *" $k "*) printf -v "$k" '%s' "$v" ;; esac
+    done < "$ENV_FILE"
+}
+
+# Write all settings to .env. Values are single-quoted: docker compose then
+# takes them literally (no $ expansion). valid_* below forbid "'" in values.
+save_env() {
+    local tmp="$ENV_FILE.tmp.$$" k
+    (
+        umask 077
+        {
+            echo "# raw_note settings, written by install_manger.sh."
+            echo "# Change them with the manager (command: raw_note), not by hand."
+            for k in "${ENV_KEYS[@]}"; do printf "%s='%s'\n" "$k" "${!k}"; done
+        } > "$tmp"
+    )
+    mv -f "$tmp" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+}
+
+valid_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]; }
+valid_user() { [[ $1 =~ ^[A-Za-z0-9._-]{1,32}$ ]]; }
+valid_pass() { [ -n "$1" ] && [ "${#1}" -le 128 ] && [[ $1 != *"'"* && $1 != *$'\n'* ]]; }
+valid_ip()   { [[ $1 =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] &&
+               local o && for o in "${BASH_REMATCH[@]:1}"; do [ "$o" -le 255 ] || return 1; done; }
+valid_dir()  { [[ $1 == /?* && $1 != *[[:space:]\'\$\`\"\\]* && $1 != */ ]]; }
+valid_tz()   { [[ $1 =~ ^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$ ]] &&
+               { [ ! -d /usr/share/zoneinfo ] || [ -f "/usr/share/zoneinfo/$1" ]; }; }
+
+PASS_RULE="1-128 characters, no single quote (') and no newline"
+USER_RULE="1-32 characters from A-Z a-z 0-9 . _ -"
+DIR_RULE="an absolute path, no spaces, quotes, \$, \` or backslash, no trailing /"
+
+# Is the TCP port held by something other than raw_note's own containers?
+port_busy() {
+    local p=$1
+    command -v ss >/dev/null 2>&1 || return 1
+    ss -Htln "sport = :$p" 2>/dev/null | grep -q . || return 1
+    if docker ps --filter "label=com.docker.compose.project=$PROJECT" \
+            --format '{{.Ports}}' 2>/dev/null | grep -Eq ":$p->"; then
+        return 1
+    fi
+    return 0
+}
+
+check_ports_free() {
+    local p
+    for p in "$@"; do
+        if port_busy "$p"; then
+            die "Port $p is already in use:
+$(ss -Htlnp "sport = :$p" 2>/dev/null | head -3)
+Stop that program, or choose another port (raw_note -> Change ports)."
+        fi
+    done
+}
+
+host_for_check() { if [ "$BIND_IP" = 0.0.0.0 ]; then echo 127.0.0.1; else echo "$BIND_IP"; fi; }
+
+host_for_user() {
+    if [ "$BIND_IP" != 0.0.0.0 ]; then echo "$BIND_IP"; return; fi
+    local ip
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo "${ip:-<server-ip>}"
+}
+
+note_count() { find "$1" -maxdepth 1 -type f ! -name '.*' 2>/dev/null | wc -l | tr -d ' '; }
+
+ask() {   # ask "Question" [default]  -> answer in REPLY
+    local q=$1 def=${2-}
+    read -r -p "$q${def:+ [$def]}: " REPLY || exit 1
+    REPLY=${REPLY:-$def}
+}
+
+confirm() { local a; read -r -p "$1 [y/N]: " a || exit 1; [[ $a =~ ^[Yy]$|^[Yy][Ee][Ss]$ ]]; }
+
+pause() { read -r -p "Press Enter to return to the menu..." _ || true; }
+
+# Run a command in a subshell so its "die" returns to the menu instead of
+# quitting. "( cmd ) || true" would switch off set -e inside cmd, so set -e
+# is turned on inside the subshell while the caller has it off.
+run_sub() {
+    set +e
+    ( set -e; "$@" )
+    set -e
+}
+
+# --------------------------------------------------------- install steps ----
+ensure_pkgs() {
+    local missing=() c
+    for c in git curl; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
+    [ "${#missing[@]}" -eq 0 ] && return 0
+    info "Installing ${missing[*]} ..."
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${missing[@]}"
+    elif command -v dnf >/dev/null 2>&1; then dnf install -y "${missing[@]}"
+    elif command -v yum >/dev/null 2>&1; then yum install -y "${missing[@]}"
+    elif command -v apk >/dev/null 2>&1; then apk add --no-cache "${missing[@]}"
+    else die "Please install: ${missing[*]}"
+    fi
+}
+
+ensure_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        info "Installing Docker (https://get.docker.com) ..."
+        curl -fsSL https://get.docker.com | sh
+    fi
+    systemctl enable --now docker >/dev/null 2>&1 || true
+    docker info >/dev/null 2>&1 || die "Docker is installed but the daemon is not running."
+    docker compose version >/dev/null 2>&1 ||
+        die "The 'docker compose' plugin is missing. Install the docker-compose-plugin package and retry."
+}
+
+sync_repo() {
+    if [ -d "$APP_DIR/.git" ]; then
+        info "Updating code in $APP_DIR ..."
+        git -C "$APP_DIR" fetch -q origin "$BRANCH"
+        git -C "$APP_DIR" checkout -q "$BRANCH"
+        git -C "$APP_DIR" merge -q --ff-only "origin/$BRANCH" ||
+            die "Local edits in $APP_DIR block the update. See: git -C $APP_DIR status"
+    elif [ -e "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
+        die "$APP_DIR exists, is not empty and is not a git checkout. Move it away or set RAW_NOTE_DIR."
+    else
+        info "Downloading code to $APP_DIR ..."
+        mkdir -p "$(dirname "$APP_DIR")"
+        git clone -q -b "$BRANCH" "$REPO_URL" "$APP_DIR"
+    fi
+    chmod +x "$APP_DIR/install_manger.sh"
+    ln -sfn "$APP_DIR/install_manger.sh" "$CMD_LINK"
+}
+
+prepare_dirs() {
+    mkdir -p "$PUBLIC_DIR" "$PRIVATE_DIR"
+    chmod 700 "$PRIVATE_DIR"
+    # One time only: copy the old setup's notes into the empty public folder.
+    if [ -d "$OLD_DATA_DIR" ] && [ "$(note_count "$PUBLIC_DIR")" = 0 ] &&
+       [ "$(note_count "$OLD_DATA_DIR")" != 0 ]; then
+        info "Copying $(note_count "$OLD_DATA_DIR") old notes: $OLD_DATA_DIR -> $PUBLIC_DIR (old folder is kept)"
+        cp -a "$OLD_DATA_DIR/." "$PUBLIC_DIR/"
+    fi
+}
+
+start_stack() {   # build images, then (re)create all containers
+    info "Building images. The first build downloads tokenizer files and takes a few minutes ..."
+    dc build
+    if ! dc up -d --remove-orphans; then
+        warn "Start failed; removing old containers and trying once more ..."
+        dc down --remove-orphans || true
+        dc up -d
+    fi
+}
+
+# Wait until both notepads answer and the tokenizer counts a real note.
+health_check() {
+    local h code_pub=000 code_priv=000 tok="" name
+    h=$(host_for_check)
+    for _ in $(seq 1 60); do
+        code_pub=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://$h:$PUBLIC_PORT/" || true)
+        code_priv=$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://$h:$PRIVATE_PORT/" || true)
+        [ "$code_pub" = 302 ] && [ "$code_priv" = 401 ] && break
+        sleep 2
+    done
+    if [ "$code_pub" = 302 ]; then info "Public notepad  OK (port $PUBLIC_PORT)"
+    else warn "Public notepad did not answer as expected (HTTP $code_pub). See: raw_note --logs"; fi
+    if [ "$code_priv" = 401 ]; then info "Private notepad OK (port $PRIVATE_PORT, password required)"
+    else warn "Private notepad did not answer as expected (HTTP $code_priv, wanted 401). See: raw_note --logs"; fi
+
+    # Token counter end to end: save a scratch note, count it, delete it.
+    [ "$code_pub" = 302 ] || return 0
+    name="zz-raw-note-selftest-$$"
+    curl -s -o /dev/null -m 5 -X POST -H 'Content-Type: text/plain' \
+        --data-binary 'hello world' "http://$h:$PUBLIC_PORT/$name" || true
+    for _ in $(seq 1 45); do   # tokenizer may still be loading its vocab
+        tok=$(curl -s -m 35 "http://$h:$PUBLIC_PORT/$name?tokens=1" || true)
+        [[ $tok == *'"anthropic"'* ]] && break
+        sleep 2
+    done
+    curl -s -o /dev/null -m 5 -X POST -H 'Content-Type: text/plain' \
+        --data-binary '' "http://$h:$PUBLIC_PORT/$name" || true
+    if [[ $tok == *'"anthropic"'* ]]; then
+        info "Token counter   OK ('hello world' -> $tok)"
+    else
+        warn "Token counter is not answering yet: ${tok:-no reply}. See: raw_note --logs"
+    fi
+}
+
+summary() {
+    local ip
+    ip=$(host_for_user)
+    echo
+    echo "${C_B}raw_note${C_N}  (code: $APP_DIR, settings: $ENV_FILE)"
+    printf '  Public   http://%s:%s   no password            notes: %s (%s)\n' \
+        "$ip" "$PUBLIC_PORT" "$PUBLIC_DIR" "$(note_count "$PUBLIC_DIR")"
+    printf '  Private  http://%s:%s   login: %s / %s   notes: %s (%s)\n' \
+        "$ip" "$PRIVATE_PORT" "$PRIVATE_USER" "$PRIVATE_PASS" "$PRIVATE_DIR" "$(note_count "$PRIVATE_DIR")"
+    printf '  Listen IP %s   Time zone %s\n' "$BIND_IP" "$TZ"
+    if [ "$PRIVATE_USER" = a ] && [ "$PRIVATE_PASS" = a ]; then
+        echo "  Login a / a is the built-in default; nothing to set up. Optional change: raw_note --passwd USER PASS"
+    fi
+    echo "  Manage: raw_note    (or: raw_note --help)"
+}
+
+# -------------------------------------------------------------- commands ----
+cmd_install() {
+    need_root --install
+    ensure_pkgs
+    ensure_docker
+    sync_repo
+    load_env      # keeps the settings of an earlier install
+    save_env
+    prepare_dirs
+    check_ports_free "$PUBLIC_PORT" "$PRIVATE_PORT"
+    start_stack
+    health_check
+    summary
+}
+
+cmd_status() {
+    need_installed; load_env
+    summary
+    echo
+    dc ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}\t{{.Ports}}' || true
+}
+
+cmd_start()   { need_root; need_installed; load_env; check_ports_free "$PUBLIC_PORT" "$PRIVATE_PORT"; dc up -d; health_check; }
+cmd_stop()    { need_root; need_installed; dc stop; info "Stopped."; }
+cmd_restart() { need_root; need_installed; load_env; dc restart; health_check; }
+cmd_logs()    { need_installed; dc logs -f --tail 100; }
+
+cmd_update() {
+    need_root; need_installed
+    sync_repo
+    load_env; save_env
+    start_stack
+    health_check
+    summary
+}
+
+cmd_passwd() {   # USER PASS
+    need_root; need_installed
+    valid_user "$1" || die "Username must be $USER_RULE."
+    valid_pass "$2" || die "Password must be $PASS_RULE."
+    load_env
+    PRIVATE_USER=$1; PRIVATE_PASS=$2
+    save_env
+    dc up -d notepad-private
+    info "Private notepad login is now user '$PRIVATE_USER' (password ${#PRIVATE_PASS} chars)."
+}
+
+cmd_ports() {    # PUBLIC PRIVATE
+    need_root; need_installed
+    valid_port "$1" && valid_port "$2" || die "Ports must be numbers from 1 to 65535."
+    [ "$1" != "$2" ] || die "The two ports must differ."
+    load_env
+    local p
+    for p in "$1" "$2"; do
+        if [ "$p" != "$PUBLIC_PORT" ] && [ "$p" != "$PRIVATE_PORT" ]; then check_ports_free "$p"; fi
+    done
+    PUBLIC_PORT=$1; PRIVATE_PORT=$2
+    save_env
+    dc stop notepad notepad-private
+    dc up -d
+    health_check
+    summary
+}
+
+cmd_bind() {     # IP
+    need_root; need_installed
+    valid_ip "$1" || die "Listen IP must be an IPv4 address, e.g. 0.0.0.0 (all) or 127.0.0.1 (local only)."
+    load_env
+    BIND_IP=$1
+    save_env
+    dc stop notepad notepad-private
+    dc up -d
+    health_check
+}
+
+cmd_tz() {       # ZONE
+    need_root; need_installed
+    valid_tz "$1" || die "Unknown time zone '$1'. Example: Australia/Perth, Asia/Shanghai, UTC."
+    load_env
+    TZ=$1
+    save_env
+    dc up -d notepad notepad-private
+    info "Time zone is now $TZ (used for new note names and list dates)."
+}
+
+# Move every entry of folder $1 into folder $2; never overwrite.
+move_entries() {
+    local f left=0
+    for f in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        if [ -e "$2/$(basename "$f")" ]; then left=$((left + 1)); continue; fi
+        mv "$f" "$2/"
+    done
+    [ "$left" -eq 0 ] || warn "$left item(s) left in $1: same name already in $2."
+}
+
+# Copy folder $1 into folder $2; never overwrite. coreutils >= 9.3 warns
+# about -n and wants --update=none; older cp only knows -n.
+copy_no_clobber() {
+    if cp --help 2>&1 | grep -q -- '--update\[='; then
+        cp -a --update=none "$1/." "$2/"
+    else
+        cp -an "$1/." "$2/"
+    fi
+}
+
+cmd_data() {     # PUBLIC_DIR PRIVATE_DIR MODE(move|copy|none)
+    need_root; need_installed
+    local np=$1 nq=$2 mode=${3:-move} old new
+    valid_dir "$np" && valid_dir "$nq" || die "Folders must be $DIR_RULE."
+    [ "$np" != "$nq" ] || die "The two folders must differ."
+    case "$np/" in "$nq/"*) die "One folder must not be inside the other." ;; esac
+    case "$nq/" in "$np/"*) die "One folder must not be inside the other." ;; esac
+    case "$mode" in move|copy|none) ;; *) die "Mode must be move, copy or none." ;; esac
+    load_env
+    [ "$np" != "$PRIVATE_DIR" ] && [ "$nq" != "$PUBLIC_DIR" ] ||
+        die "Swapping the public and private folders is not supported (notes would mix)."
+    for old in "$PUBLIC_DIR" "$PRIVATE_DIR"; do
+        for new in "$np" "$nq"; do
+            [ "$old" = "$new" ] && continue
+            case "$new/" in "$old/"*) die "$new is inside the current folder $old." ;; esac
+            case "$old/" in "$new/"*) die "The current folder $old is inside $new." ;; esac
+        done
+    done
+
+    info "Stopping raw_note ..."
+    dc stop
+    mkdir -p "$np" "$nq"
+    chmod 700 "$nq"
+    while read -r old new; do
+        [ "$old" = "$new" ] && continue
+        [ -d "$old" ] || continue
+        case "$mode" in
+            move) info "Moving notes $old -> $new";  move_entries "$old" "$new"
+                  rmdir "$old" 2>/dev/null || true ;;
+            copy) info "Copying notes $old -> $new"; copy_no_clobber "$old" "$new" ;;
+            none) info "Not touching $old (notes stay there)" ;;
+        esac
+    done <<EOF
+$PUBLIC_DIR $np
+$PRIVATE_DIR $nq
+EOF
+    PUBLIC_DIR=$np; PRIVATE_DIR=$nq
+    save_env
+    dc up -d
+    health_check
+    summary
+}
+
+cmd_backup() {   # [DIR]
+    need_root; need_installed; load_env
+    local dest=${1:-$BACKUP_DIR_DEFAULT} f
+    mkdir -p "$dest"
+    f="$dest/raw_note_$(date +%Y-%m-%d_%H%M%S).tar.gz"
+    tar -czf "$f" -C / "${PUBLIC_DIR#/}" "${PRIVATE_DIR#/}"
+    chmod 600 "$f"
+    info "Backup written: $f ($(du -h "$f" | cut -f1))"
+    echo "  Restore: tar -xzf $f -C /"
+}
+
+cmd_uninstall() {  # [--yes]
+    need_root; need_installed; load_env
+    if [ "${1:-}" != --yes ]; then
+        echo "This removes the containers, images, $APP_DIR and $CMD_LINK."
+        echo "Notes are KEPT in $PUBLIC_DIR and $PRIVATE_DIR."
+        local a; read -r -p "Type 'yes' to uninstall: " a || exit 1
+        [ "$a" = yes ] || { info "Cancelled."; return 0; }
+    fi
+    dc down --rmi local --remove-orphans || true
+    rm -f "$CMD_LINK"
+    rm -rf "$APP_DIR"
+    info "Uninstalled. Notes kept in $PUBLIC_DIR and $PRIVATE_DIR."
+}
+
+usage() {
+    cat <<EOF
+raw_note manager. Run as root.
+
+  bash install_manger.sh --install         install with defaults, ask nothing
+                                           (run again to repair; keeps settings)
+  bash install_manger.sh                   interactive menu
+
+  --status                                 URLs, folders, container state
+  --start | --stop | --restart
+  --logs                                   follow container logs (Ctrl-C quits)
+  --update                                 git pull + rebuild + restart
+  --passwd USER PASS                       private notepad login
+  --ports PUBLIC PRIVATE                   e.g. --ports 5555 4444
+  --bind IP                                listen IP: 0.0.0.0 = all, 127.0.0.1 = local only
+  --tz ZONE                                e.g. --tz Australia/Perth
+  --data PUBLIC_DIR PRIVATE_DIR [MODE]     change note folders; MODE: move (default),
+                                           copy, or none (leave old notes in place)
+  --backup [DIR]                           .tar.gz of both note folders
+                                           (default DIR: $BACKUP_DIR_DEFAULT)
+  --uninstall [--yes]                      remove app; notes are kept
+  --help
+
+From GitHub (note "bash -s --": plain "| bash --install" does not work):
+  curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh | bash -s -- --install
+  bash <(curl -Ls4 https://raw.githubusercontent.com/HelloWorldWinning/raw_note/main/install_manger.sh)
+EOF
+}
+
+# ------------------------------------------------------------------ menu ----
+menu_passwd() {
+    load_env
+    ask "New username ($USER_RULE)" "$PRIVATE_USER"; local u=$REPLY p1 p2
+    read -r -s -p "New password ($PASS_RULE): " p1; echo
+    read -r -s -p "Repeat password: " p2; echo
+    [ "$p1" = "$p2" ] || { warn "Passwords differ. Nothing changed."; return; }
+    run_sub cmd_passwd "$u" "$p1"
+}
+
+menu_ports() {
+    load_env
+    ask "Public port" "$PUBLIC_PORT";   local a=$REPLY
+    ask "Private port" "$PRIVATE_PORT"; local b=$REPLY
+    run_sub cmd_ports "$a" "$b"
+}
+
+menu_data() {
+    load_env
+    ask "Public notes folder" "$PUBLIC_DIR";   local a=$REPLY
+    ask "Private notes folder" "$PRIVATE_DIR"; local b=$REPLY
+    if [ "$a" = "$PUBLIC_DIR" ] && [ "$b" = "$PRIVATE_DIR" ]; then info "Nothing changed."; return; fi
+    echo "Existing notes:  1) move to the new folder   2) copy   3) leave them where they are"
+    ask "Choose" 1
+    local m
+    case "$REPLY" in 1) m=move ;; 2) m=copy ;; 3) m=none ;; *) warn "Invalid choice."; return ;; esac
+    run_sub cmd_data "$a" "$b" "$m"
+}
+
+menu_bind() { load_env; ask "Listen IP (0.0.0.0 = all, 127.0.0.1 = local only)" "$BIND_IP"; run_sub cmd_bind "$REPLY"; }
+menu_tz()   { load_env; ask "Time zone" "$TZ"; run_sub cmd_tz "$REPLY"; }
+menu_backup() { ask "Backup folder" "$BACKUP_DIR_DEFAULT"; run_sub cmd_backup "$REPLY"; }
+
+menu() {
+    need_root
+    if ! is_installed; then
+        echo "raw_note is not installed in $APP_DIR."
+        if confirm "Install now with defaults?"; then cmd_install; else return 0; fi
+        pause
+    fi
+    while true; do
+        clear 2>/dev/null || true
+        load_env
+        echo "${C_B}raw_note manager${C_N}   $APP_DIR"
+        echo "  public :$PUBLIC_PORT -> $PUBLIC_DIR"
+        echo "  private:$PRIVATE_PORT -> $PRIVATE_DIR  (user $PRIVATE_USER)"
+        echo
+        echo "   1) Status              2) Start             3) Stop"
+        echo "   4) Restart             5) Logs (Ctrl-C)     6) Update (git pull + rebuild)"
+        echo "   7) Private login       8) Ports             9) Note folders"
+        echo "  10) Listen IP          11) Time zone        12) Backup notes"
+        echo "  13) Uninstall           0) Exit"
+        echo
+        ask "Choose"
+        case "$REPLY" in
+            1)  run_sub cmd_status ;;
+            2)  run_sub cmd_start ;;
+            3)  run_sub cmd_stop ;;
+            4)  run_sub cmd_restart ;;
+            5)  run_sub cmd_logs ;;
+            6)  run_sub cmd_update ;;
+            7)  menu_passwd ;;
+            8)  menu_ports ;;
+            9)  menu_data ;;
+            10) menu_bind ;;
+            11) menu_tz ;;
+            12) menu_backup ;;
+            13) run_sub cmd_uninstall; is_installed || exit 0 ;;
+            0|q|Q) exit 0 ;;
+            *)  warn "Unknown choice: $REPLY" ;;
+        esac
+        pause
+    done
+}
+
+# ------------------------------------------------------------------ main ----
+main() {
+    if [ $# -eq 0 ]; then
+        [ -t 0 ] || { usage; echo; die "The menu needs a terminal. Use: bash <(curl -Ls4 URL)  or  raw_note"; }
+        menu
+        return
+    fi
+    # Non-interactive command: when this script comes through a pipe
+    # (curl | bash), stop child programs from reading the rest of the pipe.
+    [ -t 0 ] || exec </dev/null
+    case "$1" in
+        --install)   cmd_install ;;
+        --status)    cmd_status ;;
+        --start)     cmd_start ;;
+        --stop)      cmd_stop ;;
+        --restart)   cmd_restart ;;
+        --logs)      cmd_logs ;;
+        --update)    cmd_update ;;
+        --passwd)    [ $# -eq 3 ] || die "Usage: --passwd USER PASS"; cmd_passwd "$2" "$3" ;;
+        --ports)     [ $# -eq 3 ] || die "Usage: --ports PUBLIC PRIVATE"; cmd_ports "$2" "$3" ;;
+        --bind)      [ $# -eq 2 ] || die "Usage: --bind IP"; cmd_bind "$2" ;;
+        --tz)        [ $# -eq 2 ] || die "Usage: --tz ZONE"; cmd_tz "$2" ;;
+        --data)      [ $# -ge 3 ] && [ $# -le 4 ] || die "Usage: --data PUBLIC_DIR PRIVATE_DIR [move|copy|none]"
+                     cmd_data "$2" "$3" "${4:-move}" ;;
+        --backup)    cmd_backup "${2:-}" ;;
+        --uninstall) cmd_uninstall "${2:-}" ;;
+        -h|--help|help) usage ;;
+        *)           usage; echo; die "Unknown option: $1" ;;
+    esac
+}
+
+main "$@"
+exit $?
+
+</content>
+</file_003>
+
+<file_004>
+File name: docker-compose.yml
+Absolute path: /data/my_github_projects_d/raw_note/docker-compose.yml
+cat /data/my_github_projects_d/raw_note/docker-compose.yml
+<content>
+# raw_note: two notepads (public + password-protected) and one tokenizer.
+#
+# Every ${VAR:-default} below can be set in .env next to this file.
+# install_manger.sh writes that .env; without it the defaults are used.
+
+name: raw_note
+
+services:
+  # Public notepad: no password.
+  notepad:
+    build: .
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PUBLIC_PORT:-5555}:80"
+    volumes:
+      - ${PUBLIC_DIR:-/data/raw_note_d}:/var/www/html/_tmp
+    environment:
+      - TZ=${TZ:-Australia/Perth}
+      - MWN_BASE_URL=
+      - MWN_SAVE_PATH=/var/www/html/_tmp
+      - TOKENIZER_URL=http://tokenizer:6969
+      - NOTE_SPACE=public          # folder name inside the tokenizer's /notes
+    networks:
+      - default   # published port
+      - tok       # private link to the tokenizer
+    restart: unless-stopped
+    # No depends_on: notes must keep working even if the tokenizer is down.
+
+  # Private notepad: HTTP basic auth on every page and API call.
+  notepad-private:
+    build: .
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${PRIVATE_PORT:-4444}:80"
+    volumes:
+      - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/var/www/html/_tmp
+    environment:
+      - TZ=${TZ:-Australia/Perth}
+      - MWN_BASE_URL=
+      - MWN_SAVE_PATH=/var/www/html/_tmp
+      - TOKENIZER_URL=http://tokenizer:6969
+      - NOTE_SPACE=private
+      - MWN_AUTH_REQUIRED=1        # refuse to start without a user and password
+      - MWN_AUTH_USER=${PRIVATE_USER:-a}
+      - MWN_AUTH_PASS=${PRIVATE_PASS:-a}
+    networks:
+      - default
+      - tok
+    restart: unless-stopped
+
+  tokenizer:
+    build: ./tokenizer
+    volumes:
+      - ${PUBLIC_DIR:-/data/raw_note_d}:/notes/public:ro
+      - ${PRIVATE_DIR:-/data/raw_note_d_passwd}:/notes/private:ro
+    environment:
+      - NOTE_SPACES=public,private
+    networks:
+      - tok       # internal only: no published port, no internet
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 768m
+    cpus: 1         # cap at 1 core (a limit, nothing is reserved); works on 1-core hosts
+    restart: unless-stopped
+
+networks:
+  tok:
+    internal: true
+
+</content>
+</file_004>
+
+<file_005>
+File name: script.js
+Absolute path: /data/my_github_projects_d/raw_note/script.js
+cat /data/my_github_projects_d/raw_note/script.js
+<content>
+/*! Minimalist Web Notepad | https://github.com/pereorga/minimalist-web-notepad
+ *  Optimized save loop: event-driven, debounced, raw (gzip for big notes),
+ *  only marks "saved" on HTTP 2xx, warns before closing with unsaved changes.
+ *
+ *  Text access goes through `ed`: the CodeMirror editor from editor.js when
+ *  it loaded (window.rawNoteEditor), otherwise the plain textarea.
+ */
+(function () {
+    'use strict';
+
+    var IDLE_MS    = 600;        // save this long after the last keystroke / paste
+    var RETRY_MIN  = 2000;       // first retry delay after a failed save
+    var RETRY_MAX  = 30000;      // retry delay cap
+    var GZIP_MIN   = 32 * 1024;  // gzip bodies at or above this many characters
+
+    var textarea  = document.getElementById('content');
+    var printable = document.getElementById('printable');
+    var ed = window.rawNoteEditor || {
+        getValue: function () { return textarea.value; },
+        onChange: function (fn) { textarea.addEventListener('input', fn); },
+        focus: function () { textarea.focus({ preventScroll: true }); }
+    };
+    var baseTitle = document.title;
+    var canGzip   = typeof CompressionStream === 'function';
+
+    var dirty = false;   // textarea changed since the last successful save started
+    var saving = false;  // a request is in flight
+    var timer = null;
+    var retryDelay = RETRY_MIN;
+
+    // Title prefix shows state:  "• note" = unsaved,  "⚠ note" = save failing.
+    // The title is written only when the state changes, not on every key.
+    var shownState = '';
+    function setState(prefix) {
+        if (prefix === shownState) return;
+        shownState = prefix;
+        document.title = prefix ? prefix + ' ' + baseTitle : baseTitle;
+    }
+
+    function schedule(ms) {
+        clearTimeout(timer);
+        timer = setTimeout(save, ms);
+    }
+
+    // Only a change event marks the note dirty: the full text is read only
+    // when saving, never on each keystroke.
+    ed.onChange(function () {
+        dirty = true;
+        setState('•');
+        if (!saving) schedule(IDLE_MS);
+    });
+
+    function buildBody(text) {
+        if (canGzip && text.length >= GZIP_MIN) {
+            var gz = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+            return new Response(gz).blob().then(function (blob) {
+                return { body: blob, gzip: true };
+            });
+        }
+        return Promise.resolve({ body: text, gzip: false });
+    }
+
+    function save() {
+        if (!dirty || saving) return;
+        saving = true;
+        dirty = false;
+        var text = ed.getValue();
+
+        buildBody(text).then(function (b) {
+            var headers = { 'Content-Type': 'text/plain; charset=UTF-8' };
+            if (b.gzip) headers['X-Content-Gzip'] = '1';
+            return fetch(window.location.href, {
+                method: 'POST',
+                headers: headers,
+                body: b.body,
+                cache: 'no-store'
+            });
+        }).then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            saving = false;
+            retryDelay = RETRY_MIN;
+            // Tell token_badge.js the saved file changed (it re-counts it).
+            window.dispatchEvent(new CustomEvent('note-saved'));
+            if (dirty) {
+                schedule(IDLE_MS);   // user typed during the request
+            } else {
+                setState('');
+            }
+        }).catch(function () {
+            saving = false;
+            dirty = true;            // keep the change; try again later
+            setState('⚠');
+            schedule(retryDelay);
+            retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
+        });
+    }
+
+    // Warn before leaving with unsaved changes.
+    window.addEventListener('beforeunload', function (e) {
+        if (dirty || saving) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+
+    // Fill the print copy only when printing, instead of keeping a second
+    // full copy of the note in the DOM at all times.
+    window.addEventListener('beforeprint', function () {
+        printable.textContent = ed.getValue();
+    });
+    window.addEventListener('afterprint', function () {
+        printable.textContent = '';
+    });
+
+    ed.focus();
+})();
+
+</content>
+</file_005>
+
+<file_006>
+File name: Dockerfile
+Absolute path: /data/my_github_projects_d/raw_note/Dockerfile
+cat /data/my_github_projects_d/raw_note/Dockerfile
+<content>
+FROM php:7.4-apache
+
+# Set PHP configuration to production
+RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini
+
+# Enable rewrite; set ServerName to silence the AH00558 warning at start-up.
+RUN a2enmod rewrite \
+ && echo 'ServerName localhost' > /etc/apache2/conf-available/servername.conf \
+ && a2enconf servername
+
+# Import App
+COPY .htaccess index.php search.php list.php \
+     styles.css editor.js script.js token_badge.js favicon.ico notes.htaccess \
+     .Longman_Communication_3000.txt ./
+
+# Entrypoint: notes folder permissions + optional basic auth
+COPY minimalist-web-notepad-entrypoint /usr/local/bin/
+ENTRYPOINT ["minimalist-web-notepad-entrypoint"]
+CMD ["apache2-foreground"]
+
+</content>
+</file_006>
+
+<file_007>
+File name: styles.css
+Absolute path: /data/my_github_projects_d/raw_note/styles.css
+cat /data/my_github_projects_d/raw_note/styles.css
+<content>
+/*! Minimalist Web Notepad | https://github.com/pereorga/minimalist-web-notepad */
+
+html, body {
+    height: 100%;
+}
+body {
+    margin: 0;
+    overscroll-behavior: none;
+    background: #ebeef1;
+}
+.container {
+    position: fixed;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    left: 1px;
+}
+#content {
+    font-size: 100%;
+    margin: 0;
+    overscroll-behavior: none;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    padding-left: 10px;
+    padding-right: 10px;
+    overflow-y: auto;
+    resize: none;
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    box-sizing: border-box;
+    border: none;
+    outline: none;
+    overscroll-behavior: none;
+}
+/* CodeMirror editor (editor.js) that replaces #content: same look. */
+#editor {
+    height: 100%;
+    background: #fff;
+}
+#editor.cm-focused {
+    outline: none;
+}
+#editor .cm-scroller {
+    overscroll-behavior: none;
+}
+#editor .cm-content {
+    padding-top: 5px;
+    padding-bottom: 5px;
+}
+#editor .cm-line {
+    padding-left: 10px;
+    padding-right: 10px;
+}
+#printable {
+    display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+    html, body {
+    height: 100%;
+}
+body {
+        background: #383934;
+    }
+    #content {
+        background: #282923;
+        color: #f8f8f2;
+        border: 0;
+    }
+    #editor {
+        background: #282923;
+        color: #f8f8f2;
+    }
+    #editor .cm-content {
+        caret-color: #f8f8f2;
+    }
+    #editor .cm-panels {
+        background: #383934;
+        color: #f8f8f2;
+    }
+    #editor .cm-panels input,
+    #editor .cm-panels button {
+        background: #282923;
+        color: #f8f8f2;
+    }
+}
+
+@media print {
+    .container {
+        display: none;
+    }
+    #printable {
+        display: block;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+}
+
+
+
+
+/* Custom font styling */
+@font-face {
+    font-family: 'WebSFPro';
+    src: url('https://raw.githubusercontent.com/HelloWorldWinning/vps/main/folder_font_test/SF_Pro/SF-Pro.ttf') format('truetype');
+    font-display: swap;
+}
+/*
+body * {
+    font-family: -apple-system, BlinkMacSystemFont, "WebSFPro", sans-serif !important;
+    font-weight: 300 ;
+    text-align: left !important;
+    line-height: 140% !important;
+} */
+
+body * {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Arial, sans-serif !important;
+    font-weight: 300;
+    text-align: left  !important;
+    line-height: 140% !important;
+}
+
+
+
+</content>
+</file_007>
+
+<file_008>
+File name: index.php
+Absolute path: /data/my_github_projects_d/raw_note/index.php
+cat /data/my_github_projects_d/raw_note/index.php
+<content>
+<?php
+
+date_default_timezone_set(getenv('TZ') ?: 'Australia/Perth');
+// Base URL of the website, without trailing slash.
+$base_url = getenv('MWN_BASE_URL') ?: '';
+
+// Path to the directory to save the notes in, without trailing slash.
+// Should be outside of the document root, if possible.
+$save_path = getenv('MWN_SAVE_PATH') ?: '_tmp';
+
+// Disable caching.
+header('Cache-Control: no-cache, no-store, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+
+// If no name is provided or it contains invalid characters or it is too long.
+if (!isset($_GET['note']) || !preg_match('/^[a-zA-Z0-9_-]+$/', $_GET['note']) || strlen($_GET['note']) > 64) {
+
+    // Load the word list.
+    $words = @file(
+        __DIR__ . '/.Longman_Communication_3000.txt',
+        FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES
+    );
+
+    if ($words === false) {
+        http_response_code(500);
+        exit('Cannot read Longman_Communication_3000.txt');
+    }
+
+    // Keep unique, lowercase, alphabetic words.
+    $words = array_map('trim', $words);
+    $words = array_map('strtolower', $words);
+    $words = array_values(array_unique(
+        preg_grep('/^[a-z]+$/D', $words)
+    ));
+
+    if (!$words) {
+        http_response_code(500);
+        exit('The word list contains no usable words.');
+    }
+
+    // Try words in random order, avoiding existing note names.
+    shuffle($words);
+    $today = date('Y-m-d');
+
+    foreach ($words as $word) {
+        $random_name = $today . '-' . $word;
+        if (!file_exists($save_path . '/' . $random_name)) {
+            header("Location: $base_url/" . $random_name);
+            die;
+        }
+    }
+
+    // Every usable word already has a note for today.
+    http_response_code(503);
+    exit('No unused note names are available for today.');
+}
+
+// Route "search" to the search page
+if ($_GET['note'] === 'search') {
+    include 'search.php';
+    die;
+}
+
+// Route "list" to the list page
+if ($_GET['note'] === 'list') {
+    include 'list.php';
+    die;
+}
+
+$note = $_GET['note'];
+$path = $save_path . '/' . $note;
+
+// ---------------------------------------------------------------------------
+// Token counts of this SAVED note, for token_badge.js.
+//   GET /<note>?tokens=1  ->  {"o": <int>, "anthropic": <int>}
+// Served from the note's own URL on purpose: the old URL "count.php?note=..."
+// matches the EasyPrivacy rule "/count.php?", so ad blockers dropped the
+// request inside the browser and the badge showed "err".
+// The tokenizer reads the saved file itself; the note text is not re-sent.
+// Tokenizer status codes are passed through (200, 400, 404, 413).
+// 502 = tokenizer unreachable.
+// ---------------------------------------------------------------------------
+if (isset($_GET['tokens']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    header('Content-Type: application/json');
+
+    // Which folder of the tokenizer's /notes holds this notepad's files.
+    $space = getenv('NOTE_SPACE') ?: 'public';
+    $base  = rtrim(getenv('TOKENIZER_URL') ?: 'http://tokenizer:6969', '/');
+
+    $ch = curl_init($base . '/count/' . rawurlencode($space) . '/' . $note);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT        => 30,
+    ]);
+    $resp = curl_exec($ch);
+
+    if ($resp === false) {
+        http_response_code(502);
+        exit(json_encode(['error' => 'tokenizer unreachable: ' . curl_error($ch)]));
+    }
+
+    http_response_code(curl_getinfo($ch, CURLINFO_RESPONSE_CODE));
+    exit($resp);
+}
+
+// ---------------------------------------------------------------------------
+// Save.
+// Accepts three body formats:
+//   1. Raw text body (what script.js sends):      Content-Type: text/plain
+//   2. Raw gzip body (script.js, notes >= 32 KB):  header X-Content-Gzip: 1
+//   3. Legacy form field:                          curl -d "text=..."
+// ---------------------------------------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $ctype = strtolower($_SERVER['CONTENT_TYPE'] ?? '');
+
+    if (isset($_POST['text'])) {
+        $text = $_POST['text'];
+    } elseif (strpos($ctype, 'application/x-www-form-urlencoded') === 0
+              && strncmp((string)file_get_contents('php://input', false, null, 0, 5), 'text=', 5) === 0) {
+        // Form post whose "text" field PHP dropped (body > post_max_size).
+        // Refuse instead of saving the raw "text=..." body as the note.
+        http_response_code(413);
+        exit('Form body larger than post_max_size. Note NOT saved.');
+    } else {
+        $text = file_get_contents('php://input');
+
+        // When the body exceeds post_max_size, PHP discards it and the read
+        // comes back empty. Without this check an oversized paste would be
+        // treated as "empty note" and the existing note would be deleted.
+        $declared = isset($_SERVER['CONTENT_LENGTH']) ? (int)$_SERVER['CONTENT_LENGTH'] : null;
+        if ($text === false || ($declared !== null && strlen($text) !== $declared)) {
+            http_response_code(413);
+            exit('Body incomplete or larger than post_max_size. Note NOT saved.');
+        }
+
+        if (($_SERVER['HTTP_X_CONTENT_GZIP'] ?? '') === '1') {
+            $text = gzdecode($text);
+            if ($text === false) {
+                http_response_code(400);
+                exit('Invalid gzip body. Note NOT saved.');
+            }
+        }
+    }
+
+    // Empty input deletes the note.
+    if ($text === '') {
+        if (is_file($path)) {
+            unlink($path);
+        }
+        exit;
+    }
+
+    // Write to a temp file, then rename: a reader never sees a half-written note,
+    // and a failed write never truncates the existing note.
+    $tmp = $save_path . '/.' . $note . '.' . uniqid('', true) . '.tmp';
+    if (file_put_contents($tmp, $text) === false || !rename($tmp, $path)) {
+        @unlink($tmp);
+        http_response_code(500);
+        exit('Write failed. Note NOT saved.');
+    }
+    exit;
+}
+
+// Compress the page / raw output (skipped if PHP or the client can't do gzip).
+if (!ini_get('zlib.output_compression')) {
+    ob_start('ob_gzhandler');
+}
+
+// Print raw file if the client is curl, wget, or when explicitly requested.
+$ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+if (isset($_GET['raw']) || strpos($ua, 'curl') === 0 || strpos($ua, 'Wget') === 0) {
+    if (is_file($path)) {
+        header('Content-type: text/plain; charset=UTF-8');
+        readfile($path);
+    } else {
+        header('HTTP/1.0 404 Not Found');
+    }
+    die;
+}
+?><!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="Minimalist Web Notepad (https://github.com/pereorga/minimalist-web-notepad)">
+    <title><?php print $note; ?></title>
+    <link rel="shortcut icon" href="<?php print $base_url; ?>/favicon.ico">
+    <link rel="stylesheet" href="<?php print $base_url; ?>/styles.css?v=<?php print filemtime(__DIR__ . '/styles.css'); ?>">
+</head>
+<body>
+    <div class="container">
+        <textarea id="content" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"><?php
+            if (is_file($path)) {
+                print htmlspecialchars(file_get_contents($path), ENT_QUOTES, 'UTF-8');
+            }
+        ?></textarea>
+    </div>
+    <pre id="printable"></pre>
+    <script src="<?php print $base_url; ?>/editor.js?v=<?php print filemtime(__DIR__ . '/editor.js'); ?>"></script>
+    <script src="<?php print $base_url; ?>/script.js?v=<?php print filemtime(__DIR__ . '/script.js'); ?>"></script>
+    <script src="<?php print $base_url; ?>/token_badge.js?v=<?php print filemtime(__DIR__ . '/token_badge.js'); ?>"
+            data-tokens-url="<?php print $base_url . '/' . $note; ?>?tokens=1"></script>
+
+</body>
+</html>
+
+</content>
+</file_008>
+
+<file_009>
+File name: main.js
+Absolute path: /data/my_github_projects_d/raw_note/editor/src/main.js
+cat /data/my_github_projects_d/raw_note/editor/src/main.js
+<content>
+/*! raw_note editor: CodeMirror 6 (MIT, https://codemirror.net) in place of
+ *  the note textarea.
+ *
+ *  Why: a <textarea> holds the whole note as one text block. With a big note
+ *  (e.g. 1.5 MB), every Chinese IME composition step makes the browser
+ *  reprocess the whole block, so typing Chinese lags and freezes.
+ *  CodeMirror keeps only the visible lines in the page, so typing costs the
+ *  same in a 1 KB note and a 2 MB note.
+ *
+ *  Behaves like the textarea: Enter inserts a plain newline, Backspace deletes
+ *  one character, Tab moves focus, no auto-indent, no spellcheck. Adds Cmd/Ctrl+F
+ *  search (needed: the browser's own find only sees lines on screen).
+ *
+ *  Progressive enhancement: index.php still prints the note into the
+ *  textarea. This script replaces it and exposes window.rawNoteEditor for
+ *  script.js. If this script fails to load or throws, the textarea stays
+ *  and everything works as before.
+ *
+ *  Build: cd editor && npm ci && npm run build   (writes ../editor.js)
+ */
+import { EditorState } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
+import {
+  history, historyKeymap, standardKeymap,
+  insertNewline, deleteCharBackwardStrict,
+} from '@codemirror/commands';
+import { search, searchKeymap } from '@codemirror/search';
+
+(function () {
+  'use strict';
+
+  var textarea = document.getElementById('content');
+  if (!textarea) return;
+
+  var listeners = [];
+
+  var view = new EditorView({
+    state: EditorState.create({
+      doc: textarea.value,
+      extensions: [
+        history(),
+        search({ top: true }),
+        keymap.of([
+          // Plain-textarea behaviour first, so these win over standardKeymap.
+          { key: 'Enter', run: insertNewline },
+          { key: 'Backspace', run: deleteCharBackwardStrict },
+        ].concat(searchKeymap, historyKeymap, standardKeymap)),
+        EditorView.lineWrapping,
+        // Layout the editor needs to work, kept here and not only in
+        // styles.css: a stale cached styles.css must not break scrolling.
+        //   height 100%  -> editor fills the window and scrolls inside;
+        //                   without it the editor is as tall as the whole
+        //                   note, the page cannot scroll, the cursor goes
+        //                   off screen.
+        //   outline none -> no dotted focus box (CodeMirror's default).
+        EditorView.theme({
+          '&': { height: '100%' },
+          '&.cm-focused': { outline: 'none' },
+          '.cm-scroller': { overflow: 'auto', overscrollBehavior: 'none' },
+          '.cm-content': { paddingTop: '5px', paddingBottom: '5px' },
+          '.cm-line': { paddingLeft: '10px', paddingRight: '10px' },
+        }),
+        EditorState.tabSize.of(8),   // textarea default
+        EditorView.contentAttributes.of({
+          spellcheck: 'false',
+          autocorrect: 'off',
+          autocapitalize: 'off',
+          translate: 'no',
+        }),
+        EditorView.updateListener.of(function (u) {
+          if (!u.docChanged) return;
+          for (var i = 0; i < listeners.length; i++) listeners[i]();
+        }),
+      ],
+    }),
+  });
+
+  view.dom.id = 'editor';
+  textarea.parentNode.insertBefore(view.dom, textarea);
+  textarea.remove();   // frees the second full copy of the note
+
+  window.rawNoteEditor = {
+    // Full text. Builds a string from the document, so call it only when
+    // needed (on save / print), not on every keystroke.
+    getValue: function () { return view.state.doc.toString(); },
+    // fn() runs after every change of the text.
+    onChange: function (fn) { listeners.push(fn); },
+    focus: function () { view.focus(); },
+    view: view,
+  };
+})();
+
+</content>
+</file_009>
+
+</docs_in_folder>

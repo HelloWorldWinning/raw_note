@@ -32,12 +32,20 @@ import { search, searchKeymap } from '@codemirror/search';
   var textarea = document.getElementById('content');
   if (!textarea) return;
 
+  var readOnly = textarea.readOnly;
   var listeners = [];
 
   var view = new EditorView({
     state: EditorState.create({
       doc: textarea.value,
       extensions: [
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
+        // Custom commands such as insertNewline can dispatch changes directly.
+        // Block document changes too, while allowing selection/search updates.
+        EditorState.changeFilter.of(function () { return !readOnly; }),
+        // Keep keyboard selection, copying and search available when read-only.
+        EditorView.contentAttributes.of(readOnly ? { tabindex: '0', 'aria-readonly': 'true' } : {}),
         history(),
         search({ top: true }),
         keymap.of([
@@ -80,6 +88,8 @@ import { search, searchKeymap } from '@codemirror/search';
   textarea.remove();   // frees the second full copy of the note
 
   window.rawNoteEditor = {
+    // script.js runs after the original textarea has been removed.
+    readOnly: readOnly,
     // Full text. Builds a string from the document, so call it only when
     // needed (on save / print), not on every keystroke.
     getValue: function () { return view.state.doc.toString(); },

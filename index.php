@@ -71,6 +71,18 @@ if ($_GET['note'] === 'list') {
 $note = $_GET['note'];
 $path = $save_path . '/' . $note;
 
+// Reading-mode aliases. Add future query names only here.
+// Presence enables the mode, including ?read, ?read=1 and ?read=0.
+// This affects this request; removing the query restores normal editing.
+$read_only_aliases = ['read', 'view'];
+$read_only = false;
+foreach ($read_only_aliases as $alias) {
+    if (array_key_exists($alias, $_GET)) {
+        $read_only = true;
+        break;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Token counts of this SAVED note, for token_badge.js.
 //   GET /<note>?tokens=1  ->  {"o": <int>, "anthropic": <int>}
@@ -114,6 +126,13 @@ if (isset($_GET['tokens']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
 //   3. Legacy form field:                          curl -d "text=..."
 // ---------------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    // Reject writes before reading/decompressing the body or deleting a note.
+    if ($read_only) {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=UTF-8');
+        exit('Read-only view. Note NOT saved.');
+    }
 
     $ctype = strtolower($_SERVER['CONTENT_TYPE'] ?? '');
 
@@ -193,7 +212,7 @@ if (isset($_GET['raw']) || strpos($ua, 'curl') === 0 || strpos($ua, 'Wget') === 
 </head>
 <body>
     <div class="container">
-        <textarea id="content" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"><?php
+        <textarea id="content" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"<?php print $read_only ? ' readonly aria-readonly="true"' : ''; ?>><?php
             if (is_file($path)) {
                 print htmlspecialchars(file_get_contents($path), ENT_QUOTES, 'UTF-8');
             }

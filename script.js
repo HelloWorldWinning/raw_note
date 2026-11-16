@@ -16,10 +16,12 @@
     var textarea  = document.getElementById('content');
     var printable = document.getElementById('printable');
     var ed = window.rawNoteEditor || {
+        readOnly: textarea.readOnly,
         getValue: function () { return textarea.value; },
         onChange: function (fn) { textarea.addEventListener('input', fn); },
         focus: function () { textarea.focus({ preventScroll: true }); }
     };
+    var readOnly = !!ed.readOnly;
     var baseTitle = document.title;
     var canGzip   = typeof CompressionStream === 'function';
 
@@ -44,11 +46,13 @@
 
     // Only a change event marks the note dirty: the full text is read only
     // when saving, never on each keystroke.
-    ed.onChange(function () {
-        dirty = true;
-        setState('•');
-        if (!saving) schedule(IDLE_MS);
-    });
+    if (!readOnly) {
+        ed.onChange(function () {
+            dirty = true;
+            setState('•');
+            if (!saving) schedule(IDLE_MS);
+        });
+    }
 
     function buildBody(text) {
         if (canGzip && text.length >= GZIP_MIN) {
@@ -61,7 +65,7 @@
     }
 
     function save() {
-        if (!dirty || saving) return;
+        if (readOnly || !dirty || saving) return;
         saving = true;
         dirty = false;
         var text = ed.getValue();
